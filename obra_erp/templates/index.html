@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Obra ERP · Diário de Canteiro</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body>
+
+<!-- TOPO -->
+<header class="topbar">
+  <button class="icon-btn" id="btnMenu" aria-label="Abrir menu de obras">
+    <span class="hamburger"><i></i><i></i><i></i></span>
+  </button>
+  <div class="topbar-title">
+    <span class="eyebrow">DOC A · CANTEIRO</span>
+    <h1 id="obraNomeTopo">Obra ERP</h1>
+  </div>
+  <div class="topbar-stamp" id="dataHoje"></div>
+</header>
+
+<!-- SIDEBAR (DRAWER) -->
+<div class="drawer-overlay" id="drawerOverlay"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <span class="eyebrow">CENTROS DE CUSTO</span>
+    <h2>Obras</h2>
+  </div>
+  <div class="drawer-list" id="listaObras"></div>
+  <div class="drawer-new">
+    <input type="text" id="inputNovaObra" placeholder="Nome da nova obra">
+    <button class="btn btn-brass" id="btnCriarObra">+ Criar obra</button>
+  </div>
+</aside>
+
+<!-- CONTEÚDO PRINCIPAL -->
+<main class="main" id="main">
+
+  <section class="empty-state" id="emptyState">
+    <div class="stamp-ring">＋</div>
+    <p>Nenhuma obra selecionada.</p>
+    <button class="btn btn-brass" id="btnAbrirDrawerVazio">Abrir obras</button>
+  </section>
+
+  <div id="obraContent" class="hidden">
+
+    <!-- SELETOR DE SEMANA -->
+    <section class="row-between">
+      <div class="select-wrap">
+        <span class="field-label">SEMANA ATIVA</span>
+        <select id="selectSemana"></select>
+      </div>
+      <button class="btn btn-outline btn-small" id="btnNovaSemana">+ Semana</button>
+    </section>
+
+    <p class="empty-inline hidden" id="semanaVaziaMsg">Nenhuma semana cadastrada nesta obra. Crie a primeira acima.</p>
+
+    <div id="semanaContent" class="hidden">
+
+      <!-- META DA SEMANA -->
+      <section class="card">
+        <div class="card-head">
+          <span class="eyebrow">DOC B · META</span>
+          <h3>Meta da Semana</h3>
+        </div>
+        <textarea id="inputMeta" placeholder="Ex: concluir alvenaria do 2º pavimento" rows="2"></textarea>
+        <label class="checkbox-row">
+          <input type="checkbox" id="checkMetaAtingida">
+          <span>Meta atingida</span>
+        </label>
+        <button class="btn btn-brass" id="btnSalvarMeta">Salvar meta</button>
+      </section>
+
+      <div class="tick-divider"></div>
+
+      <!-- ABAS DE DIAS -->
+      <nav class="tabs" id="tabsDias"></nav>
+
+      <section class="day-totals" id="dayTotals"></section>
+
+      <!-- MÓDULO 1: RDO -->
+      <details class="accordion" id="accRdo">
+        <summary>
+          <span class="acc-code">RDO-01</span>
+          <span class="acc-title">Avanço Físico</span>
+          <span class="acc-chevron">›</span>
+        </summary>
+        <div class="acc-body">
+          <label class="field-label">Produção do dia</label>
+          <textarea id="inputProducao" rows="3" placeholder="Ex: levante de alvenaria concluído no 2º pavimento"></textarea>
+
+          <label class="field-label">Clima</label>
+          <select id="selectClima">
+            <option>☀️ Limpo</option>
+            <option>☁️ Nublado</option>
+            <option>🌦️ Chuva Leve</option>
+            <option>⛈️ Chuva c/ Paralisação</option>
+          </select>
+
+          <label class="field-label">Observações gerais</label>
+          <textarea id="inputObs" rows="2" placeholder="Ex: falta de material, atraso de fornecedor..."></textarea>
+
+          <button class="btn btn-brass" id="btnSalvarRdo">Salvar RDO</button>
+        </div>
+      </details>
+
+      <!-- MÓDULO 2: FOLHA -->
+      <details class="accordion" id="accFolha">
+        <summary>
+          <span class="acc-code">FOL-02</span>
+          <span class="acc-title">Folha de Pagamento</span>
+          <span class="acc-chevron">›</span>
+        </summary>
+        <div class="acc-body">
+
+          <details class="accordion-nested">
+            <summary>+ Cadastrar funcionário</summary>
+            <div class="acc-body">
+              <input type="text" id="inputFuncNome" placeholder="Nome">
+              <input type="text" id="inputFuncFuncao" placeholder="Função (mestre, pedreiro, servente...)">
+              <input type="number" id="inputFuncValor" placeholder="Valor da hora (R$)" min="0" step="0.5">
+              <button class="btn btn-outline" id="btnAddFunc">Adicionar à equipe</button>
+            </div>
+          </details>
+
+          <div id="listaFuncionarios" class="staff-list"></div>
+
+          <button class="btn btn-brass" id="btnSalvarHoras">Salvar ponto do dia</button>
+          <div class="ledger-total" id="totalFolhaDia"></div>
+        </div>
+      </details>
+
+      <!-- MÓDULO 3: CAIXA -->
+      <details class="accordion" id="accCaixa">
+        <summary>
+          <span class="acc-code">FIN-03</span>
+          <span class="acc-title">Caixa e Materiais</span>
+          <span class="acc-chevron">›</span>
+        </summary>
+        <div class="acc-body">
+          <label class="field-label">Categoria</label>
+          <select id="inputCategoria">
+            <option>Material</option>
+            <option>Serviço</option>
+            <option>Locação</option>
+            <option>Frete</option>
+            <option>Outro</option>
+          </select>
+
+          <label class="field-label">Descrição / Fornecedor</label>
+          <input type="text" id="inputDescricao" placeholder="Ex: Cimento - Casa do Construtor">
+
+          <label class="field-label">Valor (R$)</label>
+          <input type="number" id="inputValor" min="0" step="0.01" placeholder="0,00">
+
+          <label class="field-label">Status do pagamento</label>
+          <div class="toggle-group" id="toggleStatus">
+            <button type="button" class="toggle-opt" data-status="Reembolso">Reembolso</button>
+            <button type="button" class="toggle-opt" data-status="Em Aberto">Em Aberto</button>
+            <button type="button" class="toggle-opt" data-status="Pago">Pago</button>
+          </div>
+
+          <label class="field-label">Nota fiscal / comprovante</label>
+          <input type="file" id="inputImagem" accept="image/*,application/pdf">
+
+          <button class="btn btn-brass" id="btnLancarDespesa">Lançar despesa</button>
+
+          <div id="listaDespesas" class="expense-list"></div>
+          <div class="ledger-total" id="totalDespesasDia"></div>
+        </div>
+      </details>
+
+      <div class="tick-divider"></div>
+
+      <!-- FECHAMENTO -->
+      <section class="closing-block">
+        <div class="closing-head">
+          <span class="eyebrow">DOC C · FECHAMENTO</span>
+          <h2>Fechamento da Semana</h2>
+        </div>
+
+        <details class="accordion">
+          <summary>
+            <span class="acc-code">RDO-S</span>
+            <span class="acc-title">Relatório Físico consolidado</span>
+            <span class="acc-chevron">›</span>
+          </summary>
+          <div class="acc-body" id="relatorioFisico"></div>
+        </details>
+
+        <div class="title-block" id="titleBlock">
+          <div class="title-block-row title-block-header">
+            <span>FOLHA</span><span>REEMBOLSO GESTOR</span><span>A PAGAR TERCEIROS</span><span>TOTAL PAGO</span>
+          </div>
+          <div class="title-block-row title-block-values">
+            <span id="tbFolha">R$ 0,00</span>
+            <span id="tbReembolso">R$ 0,00</span>
+            <span id="tbTerceiros">R$ 0,00</span>
+            <span id="tbPago">R$ 0,00</span>
+          </div>
+          <div class="title-block-foot">OBRA: <b id="tbObra">—</b> · SEMANA <b id="tbSemana">—</b></div>
+        </div>
+
+        <details class="accordion">
+          <summary>
+            <span class="acc-code">FIN-S</span>
+            <span class="acc-title">Despesas detalhadas da semana</span>
+            <span class="acc-chevron">›</span>
+          </summary>
+          <div class="acc-body" id="despesasSemana"></div>
+        </details>
+
+        <a class="btn btn-outline" id="btnExportar" href="#" download>⬇ Exportar relatório (.txt)</a>
+      </section>
+
+    </div>
+  </div>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script src="/static/js/app.js"></script>
+</body>
+</html>
