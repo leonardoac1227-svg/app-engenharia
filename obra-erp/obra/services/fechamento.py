@@ -196,7 +196,7 @@ def dados_fechamento(semana_id: int) -> dict:
     for d in despesas:
         por_categoria[d["categoria"]] = round(por_categoria.get(d["categoria"], 0) + d["valor"], 2)
 
-    folha_detalhada = []
+folha_detalhada = []
     if ids:
         for r in todos(
             f"""SELECT f.id, f.nome, f.funcao,
@@ -204,7 +204,9 @@ def dados_fechamento(semana_id: int) -> dict:
                        COALESCE(SUM(h.horas_trabalhadas * h.valor_hora), 0) AS total
                   FROM horas h JOIN funcionarios f ON f.id = h.funcionario_id
                  WHERE h.dia_id IN ({marcas})
-                 GROUP BY f.id HAVING horas > 0 ORDER BY total DESC""", ids):
+                 GROUP BY f.id 
+                 HAVING SUM(h.horas_trabalhadas) > 0 
+                 ORDER BY SUM(h.horas_trabalhadas * h.valor_hora) DESC""", ids):
             folha_detalhada.append({
                 "id": r["id"], "nome": r["nome"], "funcao": r["funcao"],
                 "horas": round(r["horas"], 2), "total": round(r["total"], 2),
