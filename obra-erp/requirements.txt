@@ -1,0 +1,9 @@
+Flask>=3.0,<4
+Werkzeug>=3.0,<4
+gunicorn>=21.2,<24
+reportlab>=4.2,<5
+Pillow>=10.4,<13
+
+# Driver do Postgres — necessário apenas quando DATABASE_URL aponta para o
+# Supabase. Em SQLite (desenvolvimento) o app roda sem ele.
+psycopg[binary]>=3.1,<4
