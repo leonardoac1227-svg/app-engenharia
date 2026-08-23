@@ -196,7 +196,7 @@ def dados_fechamento(semana_id: int) -> dict:
     for d in despesas:
         por_categoria[d["categoria"]] = round(por_categoria.get(d["categoria"], 0) + d["valor"], 2)
 
-folha_detalhada = []
+    folha_detalhada = []
     if ids:
         for r in todos(
             f"""SELECT f.id, f.nome, f.funcao,
