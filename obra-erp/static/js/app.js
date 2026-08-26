@@ -44,7 +44,7 @@ async function navegar(aba, { forcar = false } = {}) {
 
   Object.entries(VIEWS).forEach(([nome, cfg]) => {
     const elemento = $(cfg.el);
-    if (elemento) { // Trava de segurança: SÓ altera se a tela existir no HTML
+    if (elemento) { // SÓ altera se o elemento existir no HTML
       elemento.classList.toggle('hidden', nome !== aba);
     }
   });
@@ -53,11 +53,14 @@ async function navegar(aba, { forcar = false } = {}) {
   $('#topbarEyebrow').textContent = VIEWS[aba].titulo;
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 
- async function renderizarAtual() {
+  await renderizarAtual();
+}
+
+async function renderizarAtual() {
   const cfg = VIEWS[estado.aba] || VIEWS.home;
   const raiz = $(cfg.el);
 
-  // Trava de segurança nova para evitar travamento da tela:
+  // Trava de segurança nova:
   if (!raiz) {
     console.warn(`Atenção: A tela ${cfg.el} não foi encontrada no HTML.`);
     return;
