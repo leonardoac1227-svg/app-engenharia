@@ -43,18 +43,26 @@ async function navegar(aba, { forcar = false } = {}) {
   salvarAbaPreferida(aba);
 
   Object.entries(VIEWS).forEach(([nome, cfg]) => {
-    $(cfg.el).classList.toggle('hidden', nome !== aba);
+    const elemento = $(cfg.el);
+    if (elemento) { // Trava de segurança: SÓ altera se a tela existir no HTML
+      elemento.classList.toggle('hidden', nome !== aba);
+    }
   });
+  
   $$('.tabbar-btn').forEach((btn) => btn.classList.toggle('active', btn.dataset.aba === aba));
   $('#topbarEyebrow').textContent = VIEWS[aba].titulo;
   window.scrollTo({ top: 0, behavior: 'instant' in window ? 'instant' : 'auto' });
 
-  await renderizarAtual();
-}
-
-async function renderizarAtual() {
+ async function renderizarAtual() {
   const cfg = VIEWS[estado.aba] || VIEWS.home;
   const raiz = $(cfg.el);
+
+  // Trava de segurança nova para evitar travamento da tela:
+  if (!raiz) {
+    console.warn(`Atenção: A tela ${cfg.el} não foi encontrada no HTML.`);
+    return;
+  }
+
   try {
     await cfg.modulo.renderizar(raiz);
   } catch (erro) {
