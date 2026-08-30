@@ -272,3 +272,29 @@ export function rosca(itens, { titulo = 'TOTAL', formatar = (v) => v } = {}) {
       <div class="rosca-legenda">${legenda}</div>
     </div>`;
 }
+
+
+/* --------------------------------------------------------------------------
+   Foto que não carrega vira um aviso, não um ícone quebrado.
+
+   O ícone padrão do navegador não diz nada e ainda parece falha do app. Aqui
+   a moldura fica no lugar, com o motivo, e o toque leva à página que explica.
+   -------------------------------------------------------------------------- */
+
+export function tratarFotosQuebradas(raiz) {
+  raiz.querySelectorAll('img[src^="/arquivos/"]').forEach((img) => {
+    if (img.dataset.tratada) return;
+    img.dataset.tratada = '1';
+    img.onerror = () => {
+      const moldura = img.closest('.foto-item') || img.parentElement;
+      if (!moldura) return;
+      moldura.classList.add('foto-indisponivel');
+      moldura.innerHTML = `
+        <a class="foto-aviso" href="${img.getAttribute('src')}" target="_blank" rel="noopener">
+          <span class="foto-aviso-ico">📎</span>
+          <span>Anexo indisponível</span>
+          <span class="foto-aviso-dica">toque para ver o motivo</span>
+        </a>`;
+    };
+  });
+}

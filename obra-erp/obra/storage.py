@@ -96,10 +96,40 @@ def url_assinada(nome: str, segundos: int | None = None) -> str | None:
 
 
 def baixar(nome: str) -> bytes | None:
+    """Lê o arquivo do bucket. Devolve None e **registra o motivo** se falhar.
+
+    Engolir o erro aqui foi o que deixou o problema das fotos difícil de achar:
+    o app respondia 404 tanto para "o arquivo nunca subiu" quanto para "a chave
+    está errada" ou "o bucket tem outro nome" — três causas com soluções bem
+    diferentes.
+    """
     try:
         return _requisitar("GET", f"/object/{config.SUPABASE_BUCKET}/{nome}")
-    except ErroStorage:
+    except ErroStorage as erro:
+        log.warning("Não foi possível ler '%s' do bucket '%s': %s",
+                    nome, config.SUPABASE_BUCKET, erro)
         return None
+
+
+def verificar(nome: str) -> dict:
+    """Diagnóstico de um anexo: onde ele está (ou por que não está)."""
+    caminho = caminho_local(nome)
+    if caminho:
+        return {"encontrado": True, "origem": "disco", "detalhe": caminho}
+
+    if not usando_supabase():
+        return {
+            "encontrado": False, "origem": "disco",
+            "detalhe": "O app está gravando anexos no disco do servidor, que é "
+                       "temporário no Render: o arquivo foi perdido em algum deploy. "
+                       "Configure SUPABASE_URL e SUPABASE_SERVICE_KEY.",
+        }
+
+    try:
+        _requisitar("GET", f"/object/{config.SUPABASE_BUCKET}/{os.path.basename(nome)}")
+        return {"encontrado": True, "origem": "supabase", "detalhe": config.SUPABASE_BUCKET}
+    except ErroStorage as erro:
+        return {"encontrado": False, "origem": "supabase", "detalhe": str(erro)}
 
 
 def apagar(nome: str) -> None:

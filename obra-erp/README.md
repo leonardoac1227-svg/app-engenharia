@@ -422,6 +422,9 @@ Duas suítes foram executadas contra este código:
   escaneado, proporção e páginas preservadas, arquivo já otimizado que não
   cresce, arquivo corrompido devolvido byte a byte, e o app rodando **sem
   pikepdf/pypdf instalados** (simulando produção sem as bibliotecas).
+- **Anexo indisponível** (8 asserções): as três causas (disco temporário,
+  chave inválida, bucket errado) resultando em mensagem específica na tela e
+  no cabeçalho da resposta, mais a conferência de anexos no diagnóstico.
 - **Entrega de anexos** (20 asserções): foto e PDF servidos pelo app tanto do
   disco quanto de um Supabase Storage simulado, MIME correto, bytes íntegros,
   ausência de redirecionamento para outro domínio (que a CSP bloquearia),

@@ -113,9 +113,14 @@ def verificar(sql: str) -> list[str]:
     alto = sql.upper()
 
     # 1) alias em HAVING / WHERE
+    #
+    # O trecho precisa parar em UNION também: sem isso, a cláusula WHERE do
+    # primeiro SELECT "engolia" o segundo, e qualquer alias declarado lá
+    # aparecia como se estivesse sendo usado no WHERE.
     for clausula in ("HAVING", "WHERE"):
-        trecho = re.search(rf"\b{clausula}\b(.+?)(\bGROUP BY\b|\bORDER BY\b|\bLIMIT\b|$)",
-                           sql, re.I | re.S)
+        trecho = re.search(
+            rf"\b{clausula}\b(.+?)(\bGROUP BY\b|\bORDER BY\b|\bLIMIT\b|\bUNION\b|$)",
+            sql, re.I | re.S)
         if not trecho:
             continue
         corpo = trecho.group(1)

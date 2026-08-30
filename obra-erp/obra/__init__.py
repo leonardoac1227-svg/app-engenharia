@@ -19,7 +19,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "2.8.1"
+__version__ = "2.8.2"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -134,4 +134,16 @@ def create_app() -> Flask:
         return {"versao_app": __version__}
 
     app.logger.info("Obra ERP %s pronto · dados em %s", __version__, config.DATA_DIR)
+
+    from . import storage
+    if storage.usando_supabase():
+        app.logger.info("Anexos: Supabase Storage · bucket '%s'", config.SUPABASE_BUCKET)
+    else:
+        # Sem bucket, o anexo vive no disco do servidor. No Render sem disco
+        # persistente isso significa perder fotos e notas a cada deploy — e o
+        # sintoma só aparece dias depois, quando alguém tenta abrir o arquivo.
+        app.logger.warning(
+            "Anexos: disco local (%s). Sem SUPABASE_URL/SUPABASE_SERVICE_KEY, "
+            "fotos e notas fiscais são APAGADAS a cada novo deploy no Render. "
+            "Veja SUPABASE.md.", config.UPLOAD_DIR)
     return app

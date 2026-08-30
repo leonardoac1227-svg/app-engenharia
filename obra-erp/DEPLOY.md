@@ -130,8 +130,33 @@ assinada do Supabase, em outro domínio. A política de segurança do app
 a resposta sem avisar. Agora o app **entrega os bytes do anexo ele mesmo**, na
 própria origem — funciona para imagem e PDF, e a URL assinada não circula.
 
-Se, mesmo atualizado, algum anexo antigo continuar faltando, o log traz
-`Anexo ausente no bucket 'anexos': <arquivo>`. Isso significa que o upload
+### Se, mesmo atualizado, os anexos continuarem faltando
+
+A partir da 2.8.2 o app **diz o motivo** em vez de mostrar "Not Found". Abrir o
+anexo leva a uma página que explica a causa, e há três possíveis:
+
+| Mensagem | O que aconteceu | O que fazer |
+|---|---|---|
+| "gravando anexos no disco do servidor, que é temporário" | O app subiu sem `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`. Os arquivos foram para o disco do Render e sumiram no deploy seguinte. | Configure as variáveis (SUPABASE.md) e refaça o deploy. Os arquivos antigos não voltam. |
+| `Supabase Storage 400: Invalid JWT` | A `service_role key` está errada ou expirada. | Copie de novo em Project Settings → API. |
+| `Supabase Storage 404` | O bucket tem outro nome. | Ajuste `SUPABASE_BUCKET` ao nome real do bucket. |
+
+**Confira em massa** com a ferramenta de auditoria, que compara o que está no
+banco com o que realmente abre:
+
+```bash
+python ferramentas/auditar_anexos.py            # só confere
+python ferramentas/auditar_anexos.py --enviar   # sobe para o bucket o que ainda estiver no disco
+```
+
+Se você acabou de configurar o Supabase e ainda tem arquivos no disco da
+instância atual, rode com `--enviar` **antes do próximo deploy** — depois dele
+eles somem.
+
+O log do boot também avisa: sem bucket configurado, aparece
+`Anexos: disco local (...) fotos e notas fiscais são APAGADAS a cada novo deploy`.
+
+O log de execução traz Isso significa que o upload
 para o Supabase falhou na época e o arquivo caiu no disco efêmero do Render,
 sumindo no deploy seguinte. A partir da 2.8.1 essa falha é registrada como
 **ERRO** no log no momento do upload, e não mais silenciosamente. Confirme as

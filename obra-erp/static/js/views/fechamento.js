@@ -7,7 +7,7 @@ import { estado, podeAdministrar, podeFinanceiro, podeLancar } from '../estado.j
 import { recarregarSemana } from '../navegacao.js';
 import {
   abrirLightbox, badgeStatus, barraProgresso, confirmar, dataBR, dataCurta, esc, esqueleto,
-  formularioModal, kpi, moeda, moedaCurta, num, toast, vazio,
+  formularioModal, kpi, moeda, moedaCurta, num, toast, tratarFotosQuebradas, vazio,
 } from '../util.js';
 import { htmlBarraSemana, ligarBarraSemana } from './comum.js';
 
@@ -284,6 +284,8 @@ export async function renderizar(raiz) {
       await recarregarSemana({ manterDia: true });
     };
   }
+
+  tratarFotosQuebradas(raiz);
 
   raiz.querySelectorAll('.foto-item img').forEach((img) => {
     img.onclick = () => abrirLightbox(img.src, img.alt);

@@ -271,6 +271,34 @@ def diagnostico():
             "aviso": "No Render sem disco persistente, anexos no disco somem a cada deploy.",
         })
 
+    # ---- anexos registrados x anexos que abrem ----
+    #
+    # É a conferência que responde "por que a foto não aparece": o banco tem o
+    # registro, mas o arquivo pode não estar em lugar nenhum.
+    try:
+        registrados = todos(
+            """SELECT arquivo AS nome FROM fotos WHERE arquivo != ''
+               UNION ALL
+               SELECT imagem_path AS nome FROM despesas
+                WHERE imagem_path IS NOT NULL AND imagem_path != ''""")
+        nomes = [linha["nome"] for linha in registrados]
+
+        # Amostra: conferir centenas de arquivos a cada clique deixaria o
+        # diagnóstico lento sem acrescentar informação.
+        amostra = nomes[:12]
+        ausentes = []
+        for nome in amostra:
+            situacao = storage.verificar(nome)
+            if not situacao["encontrado"]:
+                ausentes.append({"arquivo": nome, "motivo": situacao["detalhe"]})
+
+        resultado["anexos"]["registrados"] = len(nomes)
+        resultado["anexos"]["conferidos"] = len(amostra)
+        resultado["anexos"]["ausentes"] = len(ausentes)
+        resultado["anexos"]["exemplos_ausentes"] = ausentes[:3]
+    except Exception as erro:  # noqa: BLE001
+        resultado["anexos"]["erro_conferencia"] = str(erro)[:200]
+
     return jsonify(resultado)
 
 

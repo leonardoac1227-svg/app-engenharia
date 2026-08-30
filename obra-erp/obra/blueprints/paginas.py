@@ -8,7 +8,8 @@ import logging
 import mimetypes
 import os
 
-from flask import Blueprint, abort, redirect, render_template, send_file, send_from_directory, url_for
+from flask import (Blueprint, abort, make_response, redirect, render_template, send_file,
+                   send_from_directory, url_for)
 
 from .. import config
 from ..security import login_obrigatorio, obras_permitidas, usuario_atual
@@ -68,9 +69,20 @@ def arquivo(nome: str):
             # ficar no cache do aparelho e poupar o 4G do canteiro.
             resposta.headers["Cache-Control"] = "private, max-age=86400"
             return resposta
-        log.warning("Anexo ausente no bucket '%s': %s", config.SUPABASE_BUCKET, nome_base)
 
-    abort(404)
+    # Chegou aqui: o arquivo não está em lugar nenhum. Em vez de um "Not Found"
+    # seco, explicamos a causa provável — as três possíveis têm soluções bem
+    # diferentes, e a mensagem economiza uma investigação inteira.
+    situacao = storage.verificar(nome_base)
+    log.warning("Anexo indisponível (%s): %s · %s", situacao["origem"], nome_base,
+                situacao["detalhe"])
+
+    resposta = make_response(render_template("anexo_indisponivel.html",
+                                             arquivo=nome_base,
+                                             origem=situacao["origem"],
+                                             detalhe=situacao["detalhe"]), 404)
+    resposta.headers["X-Motivo"] = situacao["detalhe"][:180]
+    return resposta
 
 
 @bp.route("/sw.js")

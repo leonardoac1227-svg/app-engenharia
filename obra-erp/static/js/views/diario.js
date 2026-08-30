@@ -9,7 +9,7 @@ import { estado, limparRascunho, lerRascunho, podeFinanceiro, podeLancar, salvar
 import { recarregarSemana } from '../navegacao.js';
 import {
   abrirLightbox, badgeStatus, CLIMAS, confirmar, dataBR, debounce, esc, formularioModal,
-  moeda, num, toast, vazio,
+  moeda, num, toast, tratarFotosQuebradas, vazio,
 } from '../util.js';
 import { htmlBarraSemana, htmlDiasStrip, ligarBarraSemana } from './comum.js';
 import { abrirModalDespesa } from './financeiro.js';
@@ -405,6 +405,8 @@ function ligarEventos(raiz, dia) {
       await recarregarSemana({ manterDia: true });
     };
   }
+
+  tratarFotosQuebradas(raiz);
 
   // ---------------- fotos
   const inputFotos = raiz.querySelector('#inputFotos');
