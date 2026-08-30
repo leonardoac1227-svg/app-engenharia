@@ -47,7 +47,9 @@ export async function renderizar(raiz) {
 
     <div class="kpi-grid">
       ${financeiro
-        ? kpi({ rotulo: 'Custo da semana', valor: moedaCurta(fin.custo_semana), sub: `folha ${moedaCurta(fin.folha)}`, destaque: true })
+        ? kpi({ rotulo: 'Custo da semana', valor: moedaCurta(fin.custo_semana),
+                sub: fin.a_pagar ? `falta pagar ${moedaCurta(fin.a_pagar)}` : 'tudo pago',
+                estado: fin.a_pagar ? '' : 'verde', destaque: true })
         : kpi({ rotulo: 'Horas', valor: num(ind.total_horas, 1) + ' h', sub: `${ind.dias_trabalhados} dia(s)`, destaque: true })}
       ${d.metas_resumo.total
         ? kpi({ rotulo: 'Metas', valor: `${d.metas_resumo.concluidas}/${d.metas_resumo.total}`,
@@ -184,6 +186,24 @@ export async function renderizar(raiz) {
         </div>
       </div>
 
+      ${financeiro ? `
+        <div class="alerta ${d.folha_paga ? '' : 'aviso'}" style="margin-top:12px">
+          <span class="alerta-ico">${d.folha_paga ? '✓' : '●'}</span>
+          <div>
+            <b>${d.folha_paga
+              ? `Folha quitada${d.folha_paga_em ? ' em ' + dataBR(d.folha_paga_em) : ''}`
+              : `Folha em aberto · ${moeda(fin.folha)}`}</b>
+            <div class="small">${d.folha_paga
+              ? 'As horas continuam registradas — o custo da semana não muda. Só o valor pendente zerou.'
+              : 'Fechar a semana quita a folha automaticamente. As contas de material e locação continuam pendentes.'}</div>
+          </div>
+        </div>
+        ${fin.folha ? `
+          <button class="btn btn-outline btn-small" data-acao="folha"
+                  style="width:100%;margin-bottom:12px">
+            ${d.folha_paga ? '↺ Reabrir folha (paguei por engano)' : '✓ Marcar folha como paga'}
+          </button>` : ''}` : ''}
+
       ${d.folha_detalhada.length ? `
         <div class="section-head"><h3>Folha por profissional</h3></div>
         <div class="lista">
@@ -209,6 +229,28 @@ export async function renderizar(raiz) {
         </div>
         <div class="ledger-total">TOTAL EM MATERIAIS E SERVIÇOS · ${moeda(fin.despesas)}</div>` : ''}
     ` : ''}
+
+    ${d.fretes?.viagens ? `
+      <div class="section-head"><h3>Fretes</h3>
+        <span class="small muted">${d.fretes.viagens} viagem(ns) · ${moeda(d.fretes.total)}</span></div>
+      <div class="lista">
+        ${d.fretes.transportadores.map((t) => `
+          <div class="item">
+            <div class="item-corpo">
+              <div class="item-titulo">${esc(t.transportador)}</div>
+              <div class="item-sub">${t.viagens} viagem(ns) na semana</div>
+            </div>
+            <div class="item-valor">${moeda(t.total)}</div>
+          </div>`).join('')}
+      </div>` : ''}
+
+    <div class="tick-divider"></div>
+
+    <div class="section-head">
+      <h3>Arquivos da semana</h3>
+      <span class="small muted" id="arquivosContagem">carregando...</span>
+    </div>
+    <div id="blocoArquivos"></div>
 
     <div class="tick-divider"></div>
 
@@ -268,23 +310,43 @@ export async function renderizar(raiz) {
     };
   }
 
+  const btnFolha = raiz.querySelector('[data-acao=folha]');
+  if (btnFolha) {
+    btnFolha.onclick = async () => {
+      if (d.folha_paga) {
+        await api.del(`/api/semanas/${estado.semanaId}/folha/pagar`);
+        toast('Folha reaberta.');
+      } else {
+        const r = await api.post(`/api/semanas/${estado.semanaId}/folha/pagar`, {});
+        toast(`Folha quitada · ${moeda(r.valor)}`, 'ok');
+      }
+      await recarregarSemana({ manterDia: true });
+    };
+  }
+
   const btnFechar = raiz.querySelector('[data-acao=fechar]');
   if (btnFechar) {
     btnFechar.onclick = async () => {
       if (!d.fechada) {
         const ok = await confirmar({
           titulo: 'Fechar a semana?',
-          texto: 'Marca a semana como concluída para controle. Os lançamentos continuam editáveis.',
+          texto: 'Marca a semana como concluída para controle. Os lançamentos continuam editáveis.'
+            + (fin.folha && !d.folha_paga
+              ? `\n\nA folha de ${moeda(fin.folha)} será quitada — as horas continuam registradas, `
+                + 'só o valor pendente zera. Contas de material, locação e terceiros seguem em aberto.'
+              : ''),
           confirmar: 'Fechar semana',
         });
         if (!ok) return;
       }
-      await api.put(`/api/semanas/${estado.semanaId}`, { fechada: !d.fechada });
-      toast(d.fechada ? 'Semana reaberta.' : 'Semana fechada.', 'ok');
+      const r = await api.put(`/api/semanas/${estado.semanaId}`, { fechada: !d.fechada });
+      toast(d.fechada ? 'Semana reaberta.'
+        : (r?.folha?.paga ? `Semana fechada · folha de ${moeda(r.folha.valor)} quitada` : 'Semana fechada.'), 'ok');
       await recarregarSemana({ manterDia: true });
     };
   }
 
+  renderizarArquivos(raiz, financeiro);
   tratarFotosQuebradas(raiz);
 
   raiz.querySelectorAll('.foto-item img').forEach((img) => {
@@ -304,5 +366,81 @@ async function carregarResumo(raiz, forcarIa = false) {
     if (fonte) fonte.textContent = r.fonte === 'ia' ? 'RESUMO EXECUTIVO · GERADO POR IA' : 'RESUMO EXECUTIVO · AUTOMÁTICO';
   } catch (_) {
     alvo.textContent = 'Não foi possível gerar o resumo agora.';
+  }
+}
+
+
+/* --------------------------------------------------------------------------
+   Central de arquivos: tudo que foi anexado na semana num lugar só.
+
+   Antes, a nota fiscal ficava dentro do lançamento e a foto dentro do dia —
+   quando o contador pedia "as notas da semana", alguém abria despesa por
+   despesa. Aqui elas aparecem juntas, com filtro e um pacote .zip para enviar
+   de uma vez.
+   -------------------------------------------------------------------------- */
+
+let filtroArquivos = 'todos';
+
+async function renderizarArquivos(raiz, financeiro) {
+  const alvo = raiz.querySelector('#blocoArquivos');
+  const contagem = raiz.querySelector('#arquivosContagem');
+  if (!alvo) return;
+
+  const indice = await api.get(`/api/semanas/${estado.semanaId}/arquivos`);
+  contagem.textContent = indice.total
+    ? `${indice.notas} nota(s) · ${indice.fotos} foto(s)` : 'nenhum arquivo';
+
+  if (!indice.total) {
+    alvo.innerHTML = `<div class="card"><p class="small muted" style="margin:0">
+      Nenhum arquivo anexado nesta semana. Notas fiscais e comprovantes anexados no Caixa,
+      e fotos do Diário, aparecem aqui automaticamente.</p></div>`;
+    return;
+  }
+
+  const visiveis = indice.arquivos.filter((a) => filtroArquivos === 'todos' || a.tipo === filtroArquivos);
+
+  alvo.innerHTML = `
+    ${indice.notas && indice.fotos ? `
+      <div class="chips" style="margin-bottom:12px">
+        ${[['todos', `Todos (${indice.total})`], ['nota', `Notas (${indice.notas})`],
+           ['foto', `Fotos (${indice.fotos})`]].map(([valor, rotulo]) => `
+          <button class="chip ${filtroArquivos === valor ? 'ativo' : ''}" data-farq="${valor}">${rotulo}</button>`).join('')}
+      </div>` : ''}
+
+    <div class="lista">
+      ${visiveis.map((a) => `
+        <a class="item arquivo-item" href="${esc(a.url)}" target="_blank" rel="noopener">
+          <span class="arquivo-icone ${a.tipo === 'foto' ? 'foto' : (a.eh_pdf ? 'pdf' : 'imagem')}">
+            ${a.tipo === 'foto' ? '🖼' : (a.eh_pdf ? 'PDF' : 'IMG')}
+          </span>
+          <span class="item-corpo">
+            <span class="item-titulo">${esc(a.titulo)}</span>
+            <span class="item-sub">
+              ${esc(a.dia_semana)} · ${dataBR(a.data)}${a.subtitulo ? ' · ' + esc(a.subtitulo) : ''}
+            </span>
+          </span>
+          ${a.valor ? `<span class="item-valor">${moeda(a.valor)}</span>` : ''}
+        </a>`).join('')}
+    </div>
+
+    ${financeiro ? `
+      <button class="btn btn-outline" data-acao="zip" style="margin-top:12px">
+        ⬇ Baixar todos em um .zip (${indice.total})
+      </button>
+      <p class="small faint" style="margin-top:6px">
+        As notas saem renomeadas com data, número e fornecedor — prontas para enviar ao contador.
+      </p>` : ''}
+  `;
+
+  alvo.querySelectorAll('[data-farq]').forEach((chip) => {
+    chip.onclick = () => { filtroArquivos = chip.dataset.farq; renderizarArquivos(raiz, financeiro); };
+  });
+
+  const botaoZip = alvo.querySelector('[data-acao=zip]');
+  if (botaoZip) {
+    botaoZip.onclick = () => {
+      toast('Montando o pacote...');
+      baixar(`/api/semanas/${estado.semanaId}/arquivos.zip`);
+    };
   }
 }

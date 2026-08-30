@@ -14,6 +14,8 @@ from ..db import executar, registrar_auditoria, todos, um
 from ..security import (exigir_financeiro, garantir_acesso_obra, login_obrigatorio,
                         obra_da_despesa, obra_do_dia)
 from ..services.locacoes import criar_locacao
+from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
+from ..services.fretes import validar as validar_frete
 from ..services.parcelamento import gerar_parcelas, listar_grupo, remover_grupo
 from ..services.parcelamento import validar as validar_parcelamento
 from ..utils import (ApiErro, agora_iso, data_br, data_iso, formatar_bytes, hoje_iso, moeda,
@@ -101,7 +103,7 @@ def listar(dia_id: int):
     obra_do_dia(dia_id)
     rows = todos(
         """SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
-                  x.numero_nota, x.grupo_parcela, x.parcela_numero, x.parcela_total,
+                  x.numero_nota, x.grupo_parcela, x.grupo_tipo, x.parcela_numero, x.parcela_total,
                   x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo, x.etapa_id,
                   e.nome AS etapa_nome
              FROM despesas x LEFT JOIN etapas e ON e.id = x.etapa_id
@@ -149,7 +151,13 @@ def criar(dia_id: int):
     )
     registrar_auditoria(usuario, "lancou_despesa", "despesa", cur.lastrowid,
                         f"{descricao} · {valor:.2f} · {status}")
-    parcelamento = validar_parcelamento(request.form)
+    frete = validar_frete(request.form) if categoria == "Frete" else None
+    if frete:
+        resposta_frete = gerar_fretes(cur.lastrowid, obra_id, frete, usuario["id"])
+        registrar_auditoria(usuario, "lancou_frete", "despesa", cur.lastrowid,
+                            f"{frete['transportador']} · {frete['viagens']} viagem(ns)")
+
+    parcelamento = None if frete else validar_parcelamento(request.form)
     if parcelamento:
         resposta_parcelas = gerar_parcelas(cur.lastrowid, obra_id, parcelamento, usuario["id"])
         registrar_auditoria(usuario, "parcelou_nota", "despesa", cur.lastrowid,
@@ -157,6 +165,8 @@ def criar(dia_id: int):
                             f"{moeda(resposta_parcelas['valor_parcela'])}")
 
     resposta = {"id": cur.lastrowid}
+    if frete:
+        resposta["frete"] = resposta_frete
     if parcelamento:
         resposta["parcelamento"] = resposta_parcelas
     if meta:
@@ -337,3 +347,52 @@ def cancelar_parcelamento(despesa_id: int):
     registrar_auditoria(usuario, "cancelou_parcelamento", "despesa", despesa_id,
                         f"{removidas} parcela(s) em aberto removida(s)")
     return jsonify({"ok": True, "removidas": removidas})
+
+
+@bp.post("/semanas/<int:semana_id>/despesas/pagar-todas")
+@login_obrigatorio
+def pagar_todas_da_semana(semana_id: int):
+    """Baixa de uma vez as contas em aberto da semana.
+
+    Na sexta o gestor paga o bolo de notas do fornecedor e precisa refletir
+    isso no app — dar baixa em quinze lançamentos, um a um, é o tipo de
+    trabalho que faz o app ser abandonado.
+
+    Só entram as despesas **em aberto daquela semana**. Reembolsos ficam de
+    fora por padrão: eles são acerto com quem adiantou o dinheiro, não
+    pagamento a fornecedor, e costumam sair em outro momento — mas quem
+    quiser incluí-los manda `incluir_reembolsos`.
+    """
+    from ..security import obra_da_semana
+
+    usuario = exigir_financeiro()
+    obra_da_semana(semana_id)
+    dados = request.get_json(silent=True) or {}
+
+    status_alvo = ["Em Aberto"]
+    if dados.get("incluir_reembolsos"):
+        status_alvo.append("Reembolso")
+
+    marcas = ", ".join("?" for _ in status_alvo)
+    pendentes = todos(
+        f"""SELECT x.id, x.valor FROM despesas x
+              JOIN dias d ON d.id = x.dia_id
+             WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas})""",
+        [semana_id, *status_alvo])
+
+    if not pendentes:
+        return jsonify({"quitadas": 0, "total": 0.0,
+                        "mensagem": "Nenhuma conta em aberto nesta semana."})
+
+    hoje = hoje_iso()
+    executar(
+        f"""UPDATE despesas SET status_pagamento = 'Pago', pago_em = ?
+             WHERE id IN (SELECT x.id FROM despesas x JOIN dias d ON d.id = x.dia_id
+                           WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas}))""",
+        [hoje, semana_id, *status_alvo])
+
+    total = round(sum(float(p["valor"] or 0) for p in pendentes), 2)
+    registrar_auditoria(usuario, "pagou_todas_despesas", "semana", semana_id,
+                        f"{len(pendentes)} conta(s) · {moeda(total)}")
+
+    return jsonify({"quitadas": len(pendentes), "total": total, "pago_em": hoje})

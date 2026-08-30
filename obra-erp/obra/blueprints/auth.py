@@ -262,7 +262,12 @@ def diagnostico():
                 "destino": config.SUPABASE_URL,
             })
         except Exception as erro:  # noqa: BLE001
-            resultado["anexos"].update({"ok": False, "erro": str(erro)[:200]})
+            resultado["anexos"].update({
+                "ok": False,
+                "erro": str(erro)[:200],
+                "destino": config.SUPABASE_URL,
+                "bucket": config.SUPABASE_BUCKET,
+            })
     else:
         import os
         resultado["anexos"].update({
@@ -298,6 +303,10 @@ def diagnostico():
         resultado["anexos"]["exemplos_ausentes"] = ausentes[:3]
     except Exception as erro:  # noqa: BLE001
         resultado["anexos"]["erro_conferencia"] = str(erro)[:200]
+
+    # Problemas que dá para apontar sem tentar conexão nenhuma — variável
+    # colada com aspas, chave no formato errado, metade da configuração.
+    resultado["configuracao"] = config.problemas_de_configuracao()
 
     return jsonify(resultado)
 

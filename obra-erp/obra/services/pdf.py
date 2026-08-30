@@ -442,6 +442,25 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
                 f"Do total medido, {moeda(resumo_t['valor_fora_do_caixa'])} não entrou no "
                 f"pagamento desta semana, por decisão de fluxo de caixa.", estilos["legenda"]))
 
+    # ---- fretes ----
+    fretes = d.get("fretes") or {}
+    if fretes.get("viagens") and fin:
+        E.append(Paragraph("FRETES DA SEMANA", estilos["secao"]))
+        linhas = [["TRANSPORTADOR", "VIAGENS", "TOTAL"]]
+        for t in fretes["transportadores"]:
+            linhas.append([
+                Paragraph(escape(t["transportador"]), estilos["celula"]),
+                Paragraph(str(t["viagens"]), estilos["celula_dir"]),
+                Paragraph(moeda(t["total"]), estilos["celula_dir"]),
+            ])
+        linhas.append([
+            Paragraph("<b>TOTAL</b>", estilos["celula"]),
+            Paragraph(f"<b>{fretes['viagens']}</b>", estilos["celula_dir"]),
+            Paragraph(f"<b>{moeda(fretes['total'])}</b>", estilos["celula_dir"]),
+        ])
+        E.append(_tabela(linhas, [LARGURA_UTIL - 70 * mm, 30 * mm, 40 * mm], estilos,
+                         alinhar_direita=(1, 2)))
+
     # ---- clima / pendências ----
     avisos = []
     for c in d["clima_alertas"]:

@@ -151,3 +151,48 @@ def exportar_planilha_pagamento(semana_id: int):
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{nome_planilha(obra, dados)}"'},
     )
+
+
+@bp.get("/semanas/<int:semana_id>/arquivos")
+@login_obrigatorio
+def listar_arquivos_semana(semana_id: int):
+    """Índice de tudo que foi anexado na semana: notas fiscais e fotos."""
+    from ..services.arquivos_semana import listar_arquivos
+
+    obra_da_semana(semana_id)
+    indice = listar_arquivos(semana_id)
+
+    if usuario_atual()["papel"] == "mestre":
+        # O mestre vê as fotos do canteiro, não as notas fiscais nem valores.
+        indice["arquivos"] = [a for a in indice["arquivos"] if a["tipo"] == "foto"]
+        indice["notas"] = 0
+        indice["valor_com_nota"] = 0
+        indice["total"] = len(indice["arquivos"])
+
+    return jsonify(indice)
+
+
+@bp.get("/semanas/<int:semana_id>/arquivos.zip")
+@login_obrigatorio
+def baixar_arquivos_semana(semana_id: int):
+    """Todos os anexos da semana num pacote, com nomes legíveis."""
+    from ..services.arquivos_semana import gerar_zip
+    from ..utils import ApiErro, bytes_anexo, slug
+
+    if usuario_atual()["papel"] != "gestor":
+        raise ApiErro("Somente o gestor baixa o pacote de anexos.", 403)
+
+    obra_da_semana(semana_id)
+    dados = dados_fechamento(semana_id)
+    conteudo, resumo = gerar_zip(semana_id, dados, bytes_anexo)
+
+    if not resumo["total"]:
+        raise ApiErro("Esta semana ainda não tem nenhum arquivo anexado.", 404)
+
+    registrar_auditoria(usuario_atual(), "baixou_arquivos", "semana", semana_id,
+                        f"{resumo['incluidos']} arquivo(s)")
+
+    nome = (f"ARQUIVOS_{slug(dados['obra_nome']).upper()}"
+            f"_SEMANA_{dados['semana_numero']:02d}.zip")
+    return Response(conteudo, mimetype="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{nome}"'})

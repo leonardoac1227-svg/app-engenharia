@@ -660,6 +660,17 @@ input[type=file] { padding: 10px; font-size: 13px; color: var(--text-muted); }
   font-size: 22px; cursor: pointer;
 }
 
+.arquivo-item { text-decoration: none; color: inherit; }
+.arquivo-icone {
+  display: grid; place-items: center;
+  width: 42px; height: 42px; flex: none;
+  border-radius: var(--r-md);
+  font-size: 11px; font-weight: 700; letter-spacing: .02em;
+  background: var(--primary-soft); color: var(--primary);
+}
+.arquivo-icone.pdf { background: var(--danger-soft); color: var(--danger); }
+.arquivo-icone.foto { background: var(--info-soft); color: var(--info); font-size: 18px; }
+
 .foto-item.foto-indisponivel { background: var(--warn-soft); border: 1px dashed var(--warn); }
 .foto-aviso {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;

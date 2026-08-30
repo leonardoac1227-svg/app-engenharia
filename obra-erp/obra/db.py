@@ -28,7 +28,7 @@ from .sql import RLS_POSTGRES, SCHEMA_POSTGRES, alteracoes_postgres, para_postgr
 
 log = logging.getLogger("obra-erp")
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
 
 EH_POSTGRES = config.BACKEND == "postgres"
 
@@ -219,6 +219,9 @@ CREATE TABLE IF NOT EXISTS semanas (
     meta_atingida INTEGER NOT NULL DEFAULT 0,
     orcamento_previsto REAL NOT NULL DEFAULT 0,
     fechada INTEGER NOT NULL DEFAULT 0,
+    folha_paga INTEGER NOT NULL DEFAULT 0,
+    folha_paga_em TEXT,
+    folha_valor_pago REAL NOT NULL DEFAULT 0,
     criado_em TEXT NOT NULL,
     FOREIGN KEY (obra_id) REFERENCES obras (id) ON DELETE CASCADE
 );
@@ -300,6 +303,7 @@ CREATE TABLE IF NOT EXISTS despesas (
     status_pagamento TEXT NOT NULL,
     numero_nota TEXT DEFAULT '',
     grupo_parcela TEXT DEFAULT '',
+    grupo_tipo TEXT DEFAULT 'parcela',
     parcela_numero INTEGER DEFAULT 0,
     parcela_total INTEGER DEFAULT 0,
     vencimento TEXT,
@@ -464,6 +468,9 @@ COLUNAS_EXTRAS = [
     ("semanas", "data_inicio", "TEXT"),
     ("semanas", "orcamento_previsto", "REAL NOT NULL DEFAULT 0"),
     ("semanas", "fechada", "INTEGER NOT NULL DEFAULT 0"),
+    ("semanas", "folha_paga", "INTEGER NOT NULL DEFAULT 0"),
+    ("semanas", "folha_paga_em", "TEXT"),
+    ("semanas", "folha_valor_pago", "REAL NOT NULL DEFAULT 0"),
     ("dias", "data", "TEXT"),
     ("dias", "assinado_por", "TEXT DEFAULT ''"),
     ("dias", "assinado_em", "TEXT"),
@@ -483,6 +490,7 @@ COLUNAS_EXTRAS = [
     ("despesas", "criado_por", "INTEGER"),
     ("despesas", "numero_nota", "TEXT DEFAULT ''"),
     ("despesas", "grupo_parcela", "TEXT DEFAULT ''"),
+    ("despesas", "grupo_tipo", "TEXT DEFAULT 'parcela'"),
     ("despesas", "parcela_numero", "INTEGER DEFAULT 0"),
     ("despesas", "parcela_total", "INTEGER DEFAULT 0"),
 ]

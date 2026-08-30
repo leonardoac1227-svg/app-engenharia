@@ -138,6 +138,7 @@ anexo leva a uma página que explica a causa, e há três possíveis:
 | Mensagem | O que aconteceu | O que fazer |
 |---|---|---|
 | "gravando anexos no disco do servidor, que é temporário" | O app subiu sem `SUPABASE_URL`/`SUPABASE_SERVICE_KEY`. Os arquivos foram para o disco do Render e sumiram no deploy seguinte. | Configure as variáveis (SUPABASE.md) e refaça o deploy. Os arquivos antigos não voltam. |
+| `unknown url type: [https` | A variável foi colada com colchetes, aspas ou `<>` — algo como `[https://projeto.supabase.co]`. | Deixe só o endereço. A partir da 2.8.3 o app limpa isso sozinho. |
 | `Supabase Storage 400: Invalid JWT` | A `service_role key` está errada ou expirada. | Copie de novo em Project Settings → API. |
 | `Supabase Storage 404` | O bucket tem outro nome. | Ajuste `SUPABASE_BUCKET` ao nome real do bucket. |
 

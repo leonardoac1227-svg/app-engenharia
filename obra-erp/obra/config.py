@@ -71,21 +71,81 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
 # DATABASE_URL apontando para o Postgres do Supabase, o mesmo código passa a
 # falar com o Postgres; nenhum blueprint muda.
 
-DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+def variavel(nome: str, padrao: str = "") -> str:
+    """Lê uma variável de ambiente tolerando o que se cola sem querer.
+
+    Copiar credencial de documentação e de painel traz junto aspas, colchetes,
+    sinais de menor/maior e espaços — e o erro que isso gera é obscuro. Um
+    `SUPABASE_URL` colado como `[https://projeto.supabase.co]` derrubava o
+    armazenamento inteiro com a mensagem "unknown url type: [https", que não
+    diz a ninguém que o problema é um colchete.
+
+    Preferimos limpar e seguir: a intenção do valor é evidente, e falhar por
+    causa de um caractere de enfeite não protege ninguém.
+    """
+    valor = (os.environ.get(nome) or padrao or "").strip()
+    # aspas, colchetes e chevrons nas pontas
+    valor = valor.strip("\"'` \t\r\n")
+    while valor[:1] in ("[", "<", "(") and valor[-1:] in ("]", ">", ")"):
+        valor = valor[1:-1].strip()
+    valor = valor.strip("\"'` \t\r\n")
+    return valor
+
+
+DATABASE_URL = variavel("DATABASE_URL")
 BACKEND = "postgres" if DATABASE_URL.startswith(("postgres://", "postgresql://")) else "sqlite"
 
 # ---------------------------------------------------------------- anexos
 #
 # Fotos e notas fiscais podem ficar no disco (padrão) ou no Supabase Storage.
-# No Supabase, o bucket deve ser PRIVADO: o app gera uma URL assinada de curta
-# duração a cada acesso, mantendo a mesma regra de sessão da rota /arquivos.
+# No Supabase o bucket deve ser PRIVADO: o app entrega o arquivo pela rota
+# autenticada /arquivos, sem expor URL do bucket.
 
-SUPABASE_URL = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
-SUPABASE_SERVICE_KEY = os.environ.get("SUPABASE_SERVICE_KEY", "")
-SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "anexos")
-SUPABASE_URL_VALIDADE = int(os.environ.get("SUPABASE_URL_VALIDADE", "3600"))  # segundos
+
+def _url_do_supabase(bruto: str) -> str:
+    """Normaliza a URL do projeto.
+
+    Aceita o que o painel do Supabase mostra e também os enganos comuns:
+    barra no fim, caminho `/storage/v1` colado junto, e o endereço sem
+    `https://`.
+    """
+    valor = bruto.rstrip("/")
+    if not valor:
+        return ""
+    if valor.endswith("/storage/v1"):
+        valor = valor[: -len("/storage/v1")]
+    if not valor.startswith(("http://", "https://")):
+        valor = "https://" + valor
+    return valor.rstrip("/")
+
+
+SUPABASE_URL = _url_do_supabase(variavel("SUPABASE_URL"))
+SUPABASE_SERVICE_KEY = variavel("SUPABASE_SERVICE_KEY")
+SUPABASE_BUCKET = variavel("SUPABASE_BUCKET", "anexos").strip("/") or "anexos"
+SUPABASE_URL_VALIDADE = int(variavel("SUPABASE_URL_VALIDADE", "3600") or 3600)  # segundos
 
 STORAGE = "supabase" if (SUPABASE_URL and SUPABASE_SERVICE_KEY) else "local"
+
+
+def problemas_de_configuracao() -> list[str]:
+    """Erros de configuração que o app consegue apontar sozinho."""
+    avisos = []
+
+    if SUPABASE_URL and not SUPABASE_URL.startswith("https://"):
+        avisos.append(f"SUPABASE_URL deveria começar com https:// — está '{SUPABASE_URL}'.")
+    if SUPABASE_URL and "supabase" not in SUPABASE_URL:
+        avisos.append(f"SUPABASE_URL não parece ser do Supabase: '{SUPABASE_URL}'.")
+    if SUPABASE_SERVICE_KEY and SUPABASE_SERVICE_KEY.count(".") != 2:
+        avisos.append("SUPABASE_SERVICE_KEY não tem o formato de uma chave JWT "
+                      "(três partes separadas por ponto). Copie a 'service_role key' "
+                      "em Project Settings → API.")
+    if SUPABASE_URL and not SUPABASE_SERVICE_KEY:
+        avisos.append("SUPABASE_URL definida sem SUPABASE_SERVICE_KEY: os anexos "
+                      "continuam indo para o disco temporário.")
+    if SUPABASE_SERVICE_KEY and not SUPABASE_URL:
+        avisos.append("SUPABASE_SERVICE_KEY definida sem SUPABASE_URL: os anexos "
+                      "continuam indo para o disco temporário.")
+    return avisos
 
 
 def carregar_secret_key() -> str:

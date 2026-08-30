@@ -79,6 +79,26 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
     </div>
 
     ${edicao ? '' : `
+      <div id="dspFreteBox" class="hidden">
+        <div class="alerta" style="margin:14px 0 4px">
+          <span class="alerta-ico">🚚</span>
+          <div><b>Frete com várias viagens</b>
+            <div class="small">O valor acima é o de <b>cada</b> viagem. Cada uma vira um
+            lançamento no dia em que aconteceu.</div>
+          </div>
+        </div>
+
+        <label class="field-label">Quem fez o frete</label>
+        <input type="text" id="dspFreteTransportador" placeholder="Ex: Diego Motoboy">
+
+        <label class="field-label">Quantas viagens</label>
+        <input type="number" id="dspFreteViagens" min="1" max="30" step="1" value="1" inputmode="numeric">
+
+        <label class="field-label">Data de cada viagem</label>
+        <div id="dspFreteDatas" class="stack"></div>
+        <p class="small faint" id="dspFretePrevia" style="margin-top:8px"></p>
+      </div>
+
       <label class="checkbox-row" style="margin-top:16px">
         <input type="checkbox" id="dspParcelar">
         <span>Nota parcelada</span>
@@ -153,6 +173,29 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
       };
     });
 
+    // ---- frete: uma linha de data por viagem
+    const caixaFrete = raiz.querySelector('#dspFreteBox');
+    const campoViagens = raiz.querySelector('#dspFreteViagens');
+    const listaDatas = raiz.querySelector('#dspFreteDatas');
+
+    const montarDatasFrete = () => {
+      if (!caixaFrete) return;
+      const quantidade = Math.min(Math.max(Number(campoViagens.value) || 1, 1), 30);
+      const atuais = Array.from(listaDatas.querySelectorAll('input')).map((i) => i.value);
+      const referencia = dia?.data || hojeISO();
+
+      listaDatas.innerHTML = Array.from({ length: quantidade }, (_, i) => `
+        <div class="row" style="gap:8px">
+          <span class="item-sub" style="width:64px;flex:none">${i + 1}ª viagem</span>
+          <input type="date" data-frete-data="${i}" value="${esc(atuais[i] || referencia)}" style="flex:1">
+        </div>`).join('');
+
+      const valor = parseFloat(raiz.querySelector('#dspValor').value) || 0;
+      raiz.querySelector('#dspFretePrevia').textContent = valor
+        ? `${quantidade} viagem(ns) × ${moeda(valor)} = ${moeda(quantidade * valor)} no total`
+        : `${quantidade} viagem(ns) — informe o valor de cada uma`;
+    };
+
     // ---- parcelamento: divide o total da nota em contas a pagar
     const checkParcelar = raiz.querySelector('#dspParcelar');
     const caixaParcelas = raiz.querySelector('#dspParcelaBox');
@@ -221,13 +264,22 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
 
     if (boxLocacao) {
       const alternarLocacao = () => {
-        boxLocacao.classList.toggle('hidden', campoCategoria.value !== 'Locação');
+        const categoria = campoCategoria.value;
+        boxLocacao.classList.toggle('hidden', categoria !== 'Locação');
+        if (caixaFrete) {
+          caixaFrete.classList.toggle('hidden', categoria !== 'Frete');
+          if (categoria === 'Frete') montarDatasFrete();
+        }
         atualizarPrevia();
       };
       campoCategoria.onchange = alternarLocacao;
       campoFrequencia.onchange = atualizarPrevia;
       campoCiclos.oninput = atualizarPrevia;
       campoValor.addEventListener('input', atualizarPrevia);
+      if (campoViagens) {
+        campoViagens.oninput = montarDatasFrete;
+        campoValor.addEventListener('input', montarDatasFrete);
+      }
       alternarLocacao();
     }
 
@@ -313,6 +365,16 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
           if (status === 'Em Aberto') dados.append('vencimento', raiz.querySelector('#dspVencimento').value || '');
           const etapa = raiz.querySelector('#dspEtapa')?.value;
           if (etapa) dados.append('etapa_id', etapa);
+          if (campoCategoria.value === 'Frete' && caixaFrete && !caixaFrete.classList.contains('hidden')) {
+            const transportador = raiz.querySelector('#dspFreteTransportador').value.trim();
+            if (transportador) {
+              dados.append('frete_transportador', transportador);
+              dados.append('frete_viagens', campoViagens.value || '1');
+              raiz.querySelectorAll('[data-frete-data]').forEach((campo) => {
+                dados.append('frete_datas', campo.value);
+              });
+            }
+          }
           if (checkParcelar?.checked) {
             dados.append('parcelas', campoParcelas.value || '2');
             dados.append('parcela_frequencia', campoFrequenciaParcela.value);
@@ -347,6 +409,10 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
           resposta = await enviar(true);
         }
 
+        if (resposta?.frete) {
+          const f = resposta.frete;
+          toast(`${f.viagens} frete(s) de ${esc(f.transportador)} · total ${moeda(f.valor_total)}`, 'ok');
+        }
         if (resposta?.parcelamento) {
           const p = resposta.parcelamento;
           toast(`${p.parcelas}x de ${moeda(p.valor_parcela)} · 1º vencimento ${dataBR(p.primeiro_vencimento)}`, 'ok');
@@ -436,7 +502,7 @@ export async function renderizar(raiz) {
             <div class="item-sub">
               ${dataBR(x.data)} · ${esc(x.categoria)}${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}
               ${x.numero_nota ? ' · NF ' + esc(x.numero_nota) : ''}
-              ${x.parcela_total ? ` · parcela ${x.parcela_numero}/${x.parcela_total}` : ''}
+              ${x.parcela_total ? ` · ${x.grupo_tipo === 'frete' ? 'viagem' : 'parcela'} ${x.parcela_numero}/${x.parcela_total}` : ''}
               ${x.etapa_nome ? ' · ' + esc(x.etapa_nome) : ''}
             </div>
             ${x.anexo_url ? `<div class="item-sub"><a href="#" data-anexo="${esc(x.anexo_url)}" data-nome="${esc(x.nome_arquivo || 'anexo')}">📎 ${esc(x.nome_arquivo || 'ver anexo')}</a></div>` : ''}
@@ -450,6 +516,15 @@ export async function renderizar(raiz) {
     </div>
 
     <div class="ledger-total">SEMANA ${fechamento.semana_numero} · ${moeda(fin.despesas)} em materiais e serviços</div>
+
+    ${fin.em_aberto || fin.reembolso ? `
+      <button class="btn btn-outline" data-acao="pagar-tudo" style="margin-top:10px">
+        ✓ Marcar todos os custos da semana como pagos
+      </button>
+      <p class="small faint" style="margin-top:6px">
+        Dá baixa nas ${moeda(fin.em_aberto)} em aberto desta semana de uma vez.
+        ${fin.reembolso ? `Os ${moeda(fin.reembolso)} de reembolso ficam de fora — você escolhe na confirmação.` : ''}
+      </p>` : ''}
 
     ${painel.por_categoria.length ? `
       <div class="section-head"><h3>Onde o dinheiro foi</h3><span class="small muted">obra toda</span></div>
@@ -482,6 +557,28 @@ export async function renderizar(raiz) {
   });
 
   const recarregar = async () => { await recarregarSemana({ manterDia: true }); };
+
+  const botaoPagarTudo = raiz.querySelector('[data-acao=pagar-tudo]');
+  if (botaoPagarTudo) {
+    botaoPagarTudo.onclick = async () => {
+      const temReembolso = fin.reembolso > 0;
+      const confirma = await confirmar({
+        titulo: 'Marcar tudo como pago?',
+        texto: `Serão baixadas ${moeda(fin.em_aberto)} em contas em aberto da semana ${fechamento.semana_numero}.`
+          + (temReembolso
+            ? `\n\nOs ${moeda(fin.reembolso)} de reembolso NÃO entram — eles são acerto com quem adiantou o dinheiro.`
+            : ''),
+        confirmar: 'Marcar como pago',
+      });
+      if (!confirma) return;
+
+      const r = await api.post(`/api/semanas/${estado.semanaId}/despesas/pagar-todas`, {});
+      toast(r.quitadas
+        ? `${r.quitadas} conta(s) baixada(s) · ${moeda(r.total)}`
+        : 'Nenhuma conta em aberto nesta semana.', 'ok');
+      await recarregar();
+    };
+  }
 
   raiz.querySelector('[data-acao=nova-despesa]').onclick = () => {
     const dia = estado.dias.find((d) => d.hoje) || estado.diaAtivo || estado.dias[0];

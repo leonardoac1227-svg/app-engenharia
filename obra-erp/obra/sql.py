@@ -119,6 +119,9 @@ CREATE TABLE IF NOT EXISTS semanas (
     meta_atingida INTEGER NOT NULL DEFAULT 0,
     orcamento_previsto DOUBLE PRECISION NOT NULL DEFAULT 0,
     fechada INTEGER NOT NULL DEFAULT 0,
+    folha_paga INTEGER NOT NULL DEFAULT 0,
+    folha_paga_em TEXT,
+    folha_valor_pago DOUBLE PRECISION NOT NULL DEFAULT 0,
     criado_em TEXT NOT NULL
 );
 
@@ -192,6 +195,7 @@ CREATE TABLE IF NOT EXISTS despesas (
     status_pagamento TEXT NOT NULL,
     numero_nota TEXT DEFAULT '',
     grupo_parcela TEXT DEFAULT '',
+    grupo_tipo TEXT DEFAULT 'parcela',
     parcela_numero INTEGER DEFAULT 0,
     parcela_total INTEGER DEFAULT 0,
     vencimento TEXT,

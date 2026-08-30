@@ -316,6 +316,8 @@ function ligarEventos(raiz, { obra, etapas, usuarios }) {
               ${anexos.ok
                 ? (anexos.latencia_ms ? `gravou e leu em ${num(anexos.latencia_ms, 0)} ms` : 'pasta acessível')
                 : esc(anexos.erro || 'falhou')}
+              ${anexos.registrados !== undefined ? `<br>${num(anexos.registrados)} anexo(s) registrado(s)`
+                + (anexos.ausentes ? ` · <b style="color:var(--danger)">${num(anexos.ausentes)} de ${num(anexos.conferidos)} conferidos não abrem</b>` : '') : ''}
             </div>
           </div>
         </div>
@@ -325,6 +327,13 @@ function ligarEventos(raiz, { obra, etapas, usuarios }) {
             <div><b>Você não está usando o Supabase</b>
             <div class="small">A variável DATABASE_URL não chegou ao servidor. No Render sem disco
             persistente, os dados somem no próximo deploy.</div></div>
+          </div>` : ''}
+        ${(d.configuracao || []).length ? `
+          <div class="alerta perigo" style="margin-bottom:0">
+            <span class="alerta-ico">!</span>
+            <div><b>Problema na configuração</b>
+              ${d.configuracao.map((a) => `<div class="small">${esc(a)}</div>`).join('')}
+            </div>
           </div>` : ''}
         ${anexos.aviso && anexos.tipo !== 'supabase' ? `
           <div class="alerta aviso" style="margin-bottom:0">

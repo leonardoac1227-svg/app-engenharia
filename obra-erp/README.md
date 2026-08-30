@@ -31,6 +31,9 @@ aparece no dia a dia ("o que foi feito hoje?", "quanto custou a semana?",
 | Nota fiscal | não registrada | número da NF na despesa, com trava contra lançamento em duplicidade |
 | Relatório de pagamento | não existia | exportação .xlsx no modelo do escritório, uma aba por obra |
 | Nota parcelada | não existia | valor total dividido em N contas a pagar, com vencimentos próprios |
+| Frete | despesa avulsa | várias viagens do mesmo transportador, cada uma no seu dia |
+| Arquivos | espalhados por lançamento | central da semana com filtro e download em .zip |
+| Baixa de pagamento | uma conta por vez | baixa em lote da semana e quitação da folha ao fechar |
 | Código | 1 arquivo de 659 linhas | pacote modular, blueprints, camada de serviços, migrações versionadas |
 | Frontend | `innerHTML` sem escape (XSS) | ES modules, escape em todo dado do usuário, CSRF, PWA offline |
 
@@ -214,6 +217,70 @@ assim que ele circula hoje, I19 e O13 no mesmo arquivo). Com `?obra=1`, apenas
 a obra atual. A **sigla** usada no nome da aba e no título da seção vem do
 cadastro da obra (Ajustes → Dados da obra); se estiver vazia, é deduzida do
 nome — o identificador do lote, como "LOTE K42" → "K42".
+
+---
+
+## Baixa de pagamento
+
+**Todas as contas da semana de uma vez.** No Caixa, abaixo do total da semana,
+o botão *Marcar todos os custos da semana como pagos* dá baixa nas contas em
+aberto de uma vez — na sexta, quando o gestor paga o bolo de notas do
+fornecedor, baixar quinze lançamentos um a um é o tipo de trabalho que faz o
+app ser abandonado.
+
+Reembolsos ficam **de fora por padrão**: são acerto com quem adiantou o
+dinheiro, não pagamento a fornecedor, e costumam sair em outro momento. A
+confirmação avisa quanto seria incluído e deixa você escolher.
+
+**A folha é quitada ao fechar a semana.** A mão de obra é acertada no fim da
+semana, então fechar a semana zera o valor pendente da folha — e só dela. As
+contas de material, locação e medições de terceiros continuam em aberto até
+serem pagas.
+
+> **As horas nunca são apagadas.** "Zerar a folha" apagando o ponto mudaria o
+> custo daquela semana retroativamente, e o relatório já entregue ao cliente
+> passaria a mostrar outro número. O que se registra é o **pagamento**: o
+> custo da semana, a folha por profissional e as horas continuam intactos no
+> histórico; o que zera é o quanto ainda falta pagar.
+
+Dá para quitar a folha sem fechar a semana, e para reabrir se o pagamento foi
+marcado por engano. O KPI do fechamento passou a mostrar *falta pagar* em vez
+do valor da folha — é a pergunta que o gestor faz na sexta.
+
+---
+
+## Frete com várias viagens
+
+Frete de obra raramente é uma viagem só: o mesmo motoboy busca material na
+segunda, na quarta e na sexta, e cobra o conjunto no fim da semana. Lançar isso
+como uma despesa única de "3 fretes" esconde justamente o que interessa — em
+que dias houve movimento.
+
+Na categoria **Frete**, informe quem fez, quantas viagens e a data de cada uma.
+O valor digitado é o de **cada** viagem (transportador cobra por corrida, não
+um total a dividir — o oposto da nota parcelada). Cada viagem vira um
+lançamento no dia em que aconteceu, então o custo cai na semana certa e o
+relatório mostra "frete 2/3" com a data.
+
+O fechamento, o PDF e o `.txt` trazem um resumo consolidado por transportador:
+quantas viagens e quanto no total.
+
+---
+
+## Arquivos da semana
+
+No fechamento há a seção **Arquivos da semana**, que reúne tudo que foi anexado
+— notas fiscais e comprovantes do Caixa, fotos do Diário — com filtro por tipo
+e link direto. Antes era preciso abrir lançamento por lançamento para achar uma
+nota.
+
+O botão **Baixar todos em um .zip** empacota o conjunto com **nomes legíveis
+fora do app**: `notas-fiscais/2026-08-18_NF-2353_INOVACIVIL_R$120,00.pdf` em vez
+do UUID interno. O pacote separa notas e fotos em pastas e inclui um
+`_conteudo.txt` com o resumo — e, se algum arquivo não abrir, ele é listado ali
+em vez de o pacote falhar.
+
+O mestre de obra vê as fotos, não as notas fiscais.
 
 ---
 
@@ -422,6 +489,18 @@ Duas suítes foram executadas contra este código:
   escaneado, proporção e páginas preservadas, arquivo já otimizado que não
   cresce, arquivo corrompido devolvido byte a byte, e o app rodando **sem
   pikepdf/pypdf instalados** (simulando produção sem as bibliotecas).
+- **Baixa de pagamento** (30 asserções): baixa em lote sem tocar em
+  reembolsos, idempotência, quitação da folha ao fechar a semana, **horas e
+  custo histórico preservados**, locações e contas novas não afetadas, semana
+  seguinte começando limpa, reabertura e restrição por papel.
+- **Frete e arquivos** (33 asserções): viagens lançadas cada uma no seu dia,
+  valor por viagem, resumo por transportador, validações; e a central de
+  arquivos com índice, filtro, ZIP com nomes legíveis, arquivo ausente sem
+  derrubar o pacote, semana vazia e restrição por papel.
+- **Variáveis de ambiente** (17 asserções): URL colada com colchetes, aspas,
+  `<>`, espaços, quebra de linha, sem `https://` ou com `/storage/v1` junto —
+  todas normalizadas; chave e bucket idem; `DATABASE_URL` também; e os avisos
+  de configuração meia-boca.
 - **Anexo indisponível** (8 asserções): as três causas (disco temporário,
   chave inválida, bucket errado) resultando em mensagem específica na tela e
   no cabeçalho da resposta, mais a conferência de anexos no diagnóstico.

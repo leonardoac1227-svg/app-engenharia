@@ -15,6 +15,7 @@ from ..config import DIAS_SEMANA, DIAS_UTEIS
 from ..db import get_db, todos, um
 from ..utils import ApiErro, agora_iso, data_br, hoje_iso, somar_dias
 from .metas import resumo_metas
+from .fretes import resumo_semana as resumo_fretes
 from .locacoes import alertas as alertas_locacoes
 from .terceirizados import resumo_semana as resumo_terceirizados
 
@@ -130,7 +131,7 @@ def listar_dias(semana_id: int, com_fotos: bool = True) -> list[dict]:
 def dados_fechamento(semana_id: int) -> dict:
     semana = um(
         """SELECT id, obra_id, numero, data_inicio, meta, meta_atingida,
-                  orcamento_previsto, fechada
+                  orcamento_previsto, fechada, folha_paga, folha_paga_em
              FROM semanas WHERE id = ?""",
         (semana_id,),
     )
@@ -238,6 +239,7 @@ def dados_fechamento(semana_id: int) -> dict:
 
     metas = resumo_metas(semana["id"], com_progresso=True)
     terceiros = resumo_terceirizados(semana["id"])
+    fretes = resumo_fretes(semana["id"])
 
     return {
         "obra": dict(obra) if obra else {},
@@ -252,6 +254,9 @@ def dados_fechamento(semana_id: int) -> dict:
         "metas_resumo": {k: v for k, v in metas.items() if k != "lista"},
         "terceirizados": terceiros["lista"],
         "terceirizados_resumo": {k: v for k, v in terceiros.items() if k != "lista"},
+        "fretes": fretes,
+        "folha_paga": bool(semana["folha_paga"]),
+        "folha_paga_em": semana["folha_paga_em"],
         "fechada": bool(semana["fechada"]),
         "dias": dias,
         "clima_alertas": clima_alertas,
@@ -262,6 +267,10 @@ def dados_fechamento(semana_id: int) -> dict:
         "medicoes": medicoes,
         "fotos": fotos,
         "financeiro": {
+            "folha_paga": bool(semana["folha_paga"]),
+            # Falta pagar = tudo que a semana custou, menos o que já saiu.
+            # A folha quitada sai da conta; o custo total não muda.
+            "a_pagar": round((0 if semana["folha_paga"] else folha) + em_aberto + reembolso, 2),
             "folha": folha,
             "reembolso": reembolso,
             "em_aberto": em_aberto,

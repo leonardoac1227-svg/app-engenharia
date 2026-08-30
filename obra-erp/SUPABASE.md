@@ -159,6 +159,12 @@ Flask for a única porta, o modelo atual é o mais seguro.
 
 ## Problemas comuns
 
+> **Ao colar as variáveis no Render, cole apenas o valor** — sem aspas, sem
+> colchetes, sem `<>`. A documentação costuma mostrar `[SEU-PROJETO]` como
+> marcador de posição, e os colchetes acabam indo junto. Desde a 2.8.3 o app
+> remove esses caracteres sozinho e aponta o problema em Ajustes, mas o valor
+> limpo continua sendo o certo.
+
 | Sintoma | Causa provável |
 |---|---|
 | `DATABASE_URL aponta para Postgres, mas o driver não está instalado` | falta `pip install 'psycopg[binary]'` |
@@ -166,6 +172,7 @@ Flask for a única porta, o modelo atual é o mais seguro.
 | Timeout durante a migração | está usando o pooler (6543); troque pela conexão direta (5432) |
 | Fotos somem depois do deploy | `SUPABASE_URL`/`SUPABASE_SERVICE_KEY` ausentes: os anexos caíram no disco efêmero |
 | `Supabase Storage 404` ao abrir anexo | nome do bucket diferente de `SUPABASE_BUCKET` |
+| `unknown url type: [https` | `SUPABASE_URL` colada com colchetes ou aspas |
 | Anexos antigos abrem, novos não | upload falhando: o app grava no disco como reserva — confira a service key |
 
 ---

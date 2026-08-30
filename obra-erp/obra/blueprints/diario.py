@@ -6,7 +6,8 @@ from __future__ import annotations
 from flask import Blueprint, jsonify, request
 
 from ..db import executar, get_db, registrar_auditoria, todos, um
-from ..security import (exigir_lancamento, garantir_acesso_obra, login_obrigatorio, obra_da_foto,
+from ..security import (exigir_financeiro, exigir_lancamento, garantir_acesso_obra,
+                        login_obrigatorio, obra_da_foto,
                         obra_da_meta, obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
 from ..services.fechamento import garantir_dias, listar_dias
 from ..services.metas import arrastar_metas, criar_meta, listar_metas, registrar_progresso
@@ -104,8 +105,14 @@ def atualizar_semana(semana_id: int):
         campos.append("meta = ?"); valores.append(texto(dados["meta"], 400))
     if "meta_atingida" in dados:
         campos.append("meta_atingida = ?"); valores.append(1 if dados["meta_atingida"] else 0)
+    quitar_folha = False
     if "fechada" in dados:
-        campos.append("fechada = ?"); valores.append(1 if dados["fechada"] else 0)
+        fechando = 1 if dados["fechada"] else 0
+        campos.append("fechada = ?"); valores.append(fechando)
+        # Fechar a semana quita a folha: a mão de obra é acertada no fim da
+        # semana, e o que fica pendente para a semana seguinte são as contas
+        # de material, locação e terceiros — não o pagamento da equipe.
+        quitar_folha = bool(fechando) and usuario["papel"] == "gestor"
     if "orcamento_previsto" in dados or "data_inicio" in dados:
         if usuario["papel"] != "gestor":
             raise ApiErro("Somente o gestor altera orçamento e datas da semana.", 403)
@@ -120,7 +127,11 @@ def atualizar_semana(semana_id: int):
     valores.append(semana_id)
     executar(f"UPDATE semanas SET {', '.join(campos)} WHERE id = ?", valores)
     garantir_dias(semana_id)  # realinha as datas dos dias se o início mudou
-    return jsonify({"ok": True})
+
+    resposta = {"ok": True}
+    if quitar_folha:
+        resposta["folha"] = quitar_folha_da_semana(semana_id, usuario)
+    return jsonify(resposta)
 
 
 @bp.delete("/semanas/<int:semana_id>")
@@ -450,3 +461,52 @@ def progresso_meta(dia_id: int, meta_id: int):
     registrar_auditoria(usuario, "atualizou_meta", "meta", meta_id,
                         f"{meta['nome']} → {meta['percentual']:g}%")
     return jsonify(meta)
+
+
+# ---------------------------------------------------------------- folha da semana
+
+def quitar_folha_da_semana(semana_id: int, usuario: dict) -> dict:
+    """Marca a folha da semana como paga.
+
+    **As horas lançadas não são apagadas.** Zerar a folha apagando o ponto
+    mudaria o custo daquela semana retroativamente, e o relatório já entregue
+    ao cliente passaria a mostrar outro número. O que se registra aqui é o
+    pagamento: o histórico continua inteiro, e o que zera é o valor pendente.
+
+    Nada além da folha é tocado — contas de material, locação e medições de
+    terceiros seguem em aberto até serem pagas uma a uma.
+    """
+    total = um(
+        """SELECT COALESCE(SUM(h.horas_trabalhadas * h.valor_hora), 0) AS total
+             FROM horas h JOIN dias d ON d.id = h.dia_id
+            WHERE d.semana_id = ?""", (semana_id,))["total"]
+    total = round(float(total or 0), 2)
+
+    executar(
+        """UPDATE semanas SET folha_paga = 1, folha_paga_em = ?, folha_valor_pago = ?
+            WHERE id = ?""",
+        (hoje_iso(), total, semana_id))
+    registrar_auditoria(usuario, "quitou_folha", "semana", semana_id, f"R$ {total:.2f}")
+    return {"paga": True, "valor": total, "data": hoje_iso()}
+
+
+@bp.post("/semanas/<int:semana_id>/folha/pagar")
+@login_obrigatorio
+def pagar_folha(semana_id: int):
+    """Quita a folha sem precisar fechar a semana."""
+    usuario = exigir_financeiro()
+    obra_da_semana(semana_id)
+    return jsonify(quitar_folha_da_semana(semana_id, usuario)), 200
+
+
+@bp.delete("/semanas/<int:semana_id>/folha/pagar")
+@login_obrigatorio
+def reabrir_folha(semana_id: int):
+    """Desfaz a quitação (pagamento lançado por engano)."""
+    usuario = exigir_financeiro()
+    obra_da_semana(semana_id)
+    executar(
+        "UPDATE semanas SET folha_paga = 0, folha_paga_em = NULL, folha_valor_pago = 0 WHERE id = ?",
+        (semana_id,))
+    registrar_auditoria(usuario, "reabriu_folha", "semana", semana_id, "")
+    return jsonify({"paga": False})

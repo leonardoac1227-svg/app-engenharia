@@ -111,6 +111,14 @@ def relatorio_texto(d: dict, resumo_executivo: str = "") -> str:
             L.append(f"   (destes, {moeda(resumo_t['valor_fora_do_caixa'])} ficaram fora do pagamento da semana)")
         L.append("")
 
+    fretes = d.get("fretes") or {}
+    if fretes.get("viagens"):
+        L.append("4c. FRETES")
+        for t in fretes["transportadores"]:
+            L.append(f"   - {t['transportador']}: {t['viagens']} viagem(ns) · {moeda(t['total'])}")
+        L.append(f"   TOTAL EM FRETES: {moeda(fretes['total'])}")
+        L.append("")
+
     L.append("5. OCORRENCIAS DE CLIMA")
     if d["clima_alertas"]:
         for c in d["clima_alertas"]:
