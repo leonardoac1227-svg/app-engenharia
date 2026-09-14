@@ -55,9 +55,17 @@ def _driver_postgres():
 
 
 def _conectar_postgres():
+    """Importa psycopg 3 ou, na falta dele, psycopg2. Só é chamado se preciso."""
     variante, driver, fabrica_linha = _driver_postgres()
     if variante == "psycopg3":
-        return driver.connect(config.DATABASE_URL, row_factory=fabrica_linha, autocommit=False)
+        # Adicionado prepare_threshold=None para evitar erro de 'DuplicatePreparedStatement'
+        # no pooler de conexões do Render/Supabase.
+        return driver.connect(
+            config.DATABASE_URL, 
+            row_factory=fabrica_linha, 
+            autocommit=False, 
+            prepare_threshold=None
+        )
     return driver.connect(config.DATABASE_URL, cursor_factory=fabrica_linha)
 
 
