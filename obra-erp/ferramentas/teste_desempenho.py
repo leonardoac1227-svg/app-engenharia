@@ -52,12 +52,8 @@ H = {"X-CSRF-Token": c.get("/api/sessao").get_json()["csrf"]}
 
 # ---- massa parecida com uma obra de dois meses ----
 O = c.post("/api/obras", json={"nome": "Desempenho", "cliente": "X"}, headers=H).get_json()["id"]
-c.post(f"/api/obras/{O}/etapas", json={"modelo": True}, headers=H)
-funcionarios = [c.post(f"/api/obras/{O}/funcionarios", json={"nome": f"P{i}", "valor_hora": 25},
+funcionarios = [c.post(f"/api/obras/{O}/funcionarios", json={"nome": f"P{i}"},
                        headers=H).get_json()["id"] for i in range(8)]
-contratos = [c.post(f"/api/obras/{O}/contratos",
-                    json={"empresa": f"E{i}", "servico": f"S{i}", "valor_total": 30000},
-                    headers=H).get_json()["id"] for i in range(5)]
 
 
 def _foto():
@@ -86,12 +82,9 @@ for s in range(8):
                    headers=H, content_type="multipart/form-data")
     c.post(f"/api/dias/{dias[0]['id']}/fotos", data={"fotos": [_foto(), _foto()]},
            headers=H, content_type="multipart/form-data")
-    for contrato in contratos:
-        c.post(f"/api/contratos/{contrato}/semanas/{S}/medicao", json={"percentual": 5}, headers=H)
-    c.post(f"/api/semanas/{S}/metas", json={"nome": f"Meta {s}"}, headers=H)
 
 ULTIMA = semanas[-1]
-print(f"Massa: 8 semanas · 120 despesas · {len(contratos) * 8} medições · 8 profissionais\n")
+print("Massa: 8 semanas · 120 despesas · 8 profissionais\n")
 
 
 def medir(rotulo, url, teto):
@@ -109,7 +102,6 @@ medir("abertura do app", f"/api/inicio?obra={O}", 22)
 medir("painel", f"/api/obras/{O}/dashboard", 36)
 medir("fechamento", f"/api/semanas/{ULTIMA}/fechamento", 28)
 medir("caixa", f"/api/obras/{O}/financeiro", 10)
-medir("terceirizados", f"/api/obras/{O}/terceirizados", 8)
 medir("locações", f"/api/obras/{O}/locacoes", 8)
 medir("dias da semana", f"/api/semanas/{ULTIMA}/dias", 14)
 medir("relatório PDF", f"/api/semanas/{ULTIMA}/relatorio.pdf", 30)
@@ -127,13 +119,16 @@ ok(abs(ultima_semana - primeira_semana) <= 2,
    f"fechamento da 1ª e da 8ª semana custam o mesmo ({primeira_semana} x {ultima_semana})",
    (primeira_semana, ultima_semana))
 
-for contrato in contratos:
-    c.post(f"/api/contratos/{contrato}/semanas/{ULTIMA}/medicao", json={"percentual": 6},
-           headers=H)
+dia_ultima = c.get(f"/api/semanas/{ULTIMA}/dias").get_json()[1]["id"]
+for k in range(10):
+    c.post(f"/api/dias/{dia_ultima}/despesas",
+           data={"categoria": "Material", "descricao": f"Extra {k}", "valor": "10",
+                 "status_pagamento": "Em Aberto"},
+           headers=H, content_type="multipart/form-data")
 CONTADOR["n"] = 0
 c.get(f"/api/semanas/{ULTIMA}/fechamento")
 ok(CONTADOR["n"] <= ultima_semana + 2,
-   f"mais medições na semana não multiplicam consultas ({ultima_semana} -> {CONTADOR['n']})",
+   f"mais despesas na semana não multiplicam consultas ({ultima_semana} -> {CONTADOR['n']})",
    CONTADOR["n"])
 
 print("\n== COMPRESSÃO E CACHE ==")

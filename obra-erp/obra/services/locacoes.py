@@ -129,17 +129,30 @@ def listar_locacoes(obra_id: int, incluir_encerradas: bool = True) -> list[dict]
     filtro = "" if incluir_encerradas else " AND l.status = 'ativa'"
     hoje = hoje_iso()
 
-    saida = []
-    for linha in todos(
+    locacoes = [dict(linha) for linha in todos(
         f"""SELECT l.*, e.nome AS etapa_nome
               FROM locacoes l
               LEFT JOIN etapas e ON e.id = l.etapa_id
              WHERE l.obra_id = ?{filtro}
-             ORDER BY l.status, l.data_inicio DESC, l.id DESC""", (obra_id,)):
+             ORDER BY l.status, l.data_inicio DESC, l.id DESC""", (obra_id,))]
+    if not locacoes:
+        return []
 
-        locacao = dict(linha)
-        parcelas = [dict(p) for p in todos(
-            "SELECT * FROM locacao_parcelas WHERE locacao_id = ? ORDER BY numero", (locacao["id"],))]
+    # Todas as parcelas de todas as locações numa consulta só, em vez de uma
+    # consulta por equipamento alugado.
+    marcas = ", ".join("?" for _ in locacoes)
+    por_locacao: dict[int, list[dict]] = {}
+    for registro in todos(
+        f"""SELECT * FROM locacao_parcelas
+             WHERE locacao_id IN ({marcas})
+             ORDER BY locacao_id, numero""",
+        [l["id"] for l in locacoes],
+    ):
+        por_locacao.setdefault(registro["locacao_id"], []).append(dict(registro))
+
+    saida = []
+    for locacao in locacoes:
+        parcelas = por_locacao.get(locacao["id"], [])
 
         for parcela in parcelas:
             parcela["situacao"] = _situacao_parcela(parcela, hoje)

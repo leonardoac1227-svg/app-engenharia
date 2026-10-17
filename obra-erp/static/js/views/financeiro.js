@@ -142,13 +142,6 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
       <input type="date" id="dspVencimento" value="${esc(despesa?.vencimento || '')}">
     </div>
 
-    ${estado.etapas.length ? `
-      <label class="field-label">Etapa do cronograma</label>
-      <select id="dspEtapa">
-        <option value="">— sem vínculo —</option>
-        ${estado.etapas.map((e) => `<option value="${e.id}"${String(e.id) === String(despesa?.etapa_id || '') ? ' selected' : ''}>${esc(e.nome)}</option>`).join('')}
-      </select>` : ''}
-
     ${edicao ? '' : `
       <label class="field-label">Nota fiscal / comprovante</label>
       <div class="btn-linha" style="margin-top:0">
@@ -349,7 +342,6 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
             confirmar_duplicidade: confirmarDuplicidade,
             status_pagamento: status,
             vencimento: status === 'Em Aberto' ? raiz.querySelector('#dspVencimento').value : '',
-            etapa_id: raiz.querySelector('#dspEtapa')?.value || null,
           }, { silencioso: true });
         }
         {
@@ -363,8 +355,6 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
           if (numeroNota) dados.append('numero_nota', numeroNota);
           if (confirmarDuplicidade) dados.append('confirmar_duplicidade', '1');
           if (status === 'Em Aberto') dados.append('vencimento', raiz.querySelector('#dspVencimento').value || '');
-          const etapa = raiz.querySelector('#dspEtapa')?.value;
-          if (etapa) dados.append('etapa_id', etapa);
           if (campoCategoria.value === 'Frete' && caixaFrete && !caixaFrete.classList.contains('hidden')) {
             const transportador = raiz.querySelector('#dspFreteTransportador').value.trim();
             if (transportador) {
@@ -478,7 +468,7 @@ export async function renderizar(raiz) {
       ${kpi({ rotulo: 'Em aberto', valor: moedaCurta(painel.total_em_aberto), sub: 'contas a pagar', estado: painel.total_em_aberto ? 'amarelo' : 'verde', destaque: true })}
       ${kpi({ rotulo: 'Vencido', valor: moedaCurta(painel.total_vencido), sub: `${painel.vencidas.length} conta(s)`, estado: painel.total_vencido ? 'vermelho' : 'verde' })}
       ${kpi({ rotulo: 'Vence em 7 dias', valor: moedaCurta(painel.total_proximas), sub: `${painel.proximas.length} conta(s)` })}
-      ${kpi({ rotulo: 'Custo da semana', valor: moedaCurta(fin.custo_semana), sub: `folha ${moedaCurta(fin.folha)}` })}
+      ${kpi({ rotulo: 'Custo da semana', valor: moedaCurta(fin.custo_semana), sub: fin.folha ? `folha ${moedaCurta(fin.folha)}` : `${fechamento.despesas.length} lançamento(s)` })}
     </div>
 
     ${painel.vencidas.length ? listaConta(painel.vencidas, '⚠ Contas vencidas', true) : ''}
@@ -503,7 +493,6 @@ export async function renderizar(raiz) {
               ${dataBR(x.data)} · ${esc(x.categoria)}${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}
               ${x.numero_nota ? ' · NF ' + esc(x.numero_nota) : ''}
               ${x.parcela_total ? ` · ${x.grupo_tipo === 'frete' ? 'viagem' : 'parcela'} ${x.parcela_numero}/${x.parcela_total}` : ''}
-              ${x.etapa_nome ? ' · ' + esc(x.etapa_nome) : ''}
             </div>
             ${x.anexo_url ? `<div class="item-sub"><a href="#" data-anexo="${esc(x.anexo_url)}" data-nome="${esc(x.nome_arquivo || 'anexo')}">📎 ${esc(x.nome_arquivo || 'ver anexo')}</a></div>` : ''}
           </div>

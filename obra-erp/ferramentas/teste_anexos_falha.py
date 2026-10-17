@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """Anexo que não existe: a resposta precisa dizer POR QUE, não só 404."""
 import io, os, sys
-os.environ['DATA_DIR'] = '/tmp/anxf_dados'
-sys.path.insert(0, '/home/claude/obra-erp')
+import os
+import sys
+import tempfile
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="obra-teste-"))
 from PIL import Image
 
 falhas = []

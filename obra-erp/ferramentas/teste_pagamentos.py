@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Baixa em lote das contas e quitação da folha ao fechar a semana."""
+"""Baixa em lote das contas, ponto só de presença e folha de semanas antigas."""
 import os, sys
-os.environ['DATA_DIR'] = '/tmp/pag_dados'
-sys.path.insert(0, '/home/claude/obra-erp')
+import os
+import sys
+import tempfile
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="obra-teste-"))
 from obra import create_app
 
 falhas = []
@@ -28,17 +37,20 @@ desp('Areia', 450, 'Em Aberto')
 desp('Combustível', 120, 'Reembolso')
 desp('Brita', 300, 'Pago')
 
+# valor_hora enviado por um cliente antigo é ignorado: o ponto não gera custo.
 f1 = c.post(f'/api/obras/{O}/funcionarios', json={'nome':'SERGIO','valor_hora':28}, headers=H).get_json()['id']
-f2 = c.post(f'/api/obras/{O}/funcionarios', json={'nome':'WENDEL','valor_hora':20}, headers=H).get_json()['id']
+f2 = c.post(f'/api/obras/{O}/funcionarios', json={'nome':'WENDEL'}, headers=H).get_json()['id']
 for d in dias[:5]:
     c.put(f"/api/dias/{d['id']}/horas", json={'registros':[
         {'funcionario_id':f1,'horas':8},{'funcionario_id':f2,'horas':8}]}, headers=H)
 
 print('== SITUAÇÃO INICIAL ==')
 fin = c.get(f'/api/semanas/{S}/fechamento').get_json()['financeiro']
-ok(fin['folha'] == 1920.0, 'folha da semana (5 dias × 2 pessoas)', fin['folha'])
+ok(fin['folha'] == 0, 'ponto de presença não gera folha', fin['folha'])
 ok(fin['em_aberto'] == 1450.0, 'contas em aberto', fin['em_aberto'])
-ok(fin['a_pagar'] == 1920.0 + 1450.0 + 120.0, 'a pagar = folha + aberto + reembolso', fin['a_pagar'])
+ok(fin['a_pagar'] == 1450.0 + 120.0, 'a pagar = aberto + reembolso', fin['a_pagar'])
+fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
+ok(fe['indicadores']['total_horas'] == 80.0, 'horas continuam contadas', fe['indicadores']['total_horas'])
 custo_original = fin['custo_semana']
 
 print('== BAIXA EM LOTE ==')
@@ -63,27 +75,32 @@ ok(r.get_json()['quitadas'] == 1 and r.get_json()['total'] == 120.0,
 r = c.post(f'/api/semanas/{S}/despesas/pagar-todas', json={}, headers=H)
 ok(r.get_json()['quitadas'] == 0, 'rodar de novo não faz nada (idempotente)', r.get_json())
 
-print('== FOLHA AO FECHAR A SEMANA ==')
+print('== FECHAR A SEMANA ==')
 fin = c.get(f'/api/semanas/{S}/fechamento').get_json()['financeiro']
-ok(fin['a_pagar'] == 1920.0, 'só a folha continua pendente', fin['a_pagar'])
-
+ok(fin['a_pagar'] == 0, 'nada pendente depois das baixas', fin['a_pagar'])
 r = c.put(f'/api/semanas/{S}', json={'fechada': True}, headers=H)
-ok(r.get_json().get('folha', {}).get('paga'), 'fechar a semana quita a folha', r.get_json())
-ok(r.get_json()['folha']['valor'] == 1920.0, 'valor quitado é o da folha', r.get_json()['folha'])
-
+ok(r.get_json()['folha']['valor'] == 0, 'fechar não inventa folha', r.get_json())
 fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
-ok(fe['folha_paga'] and fe['folha_paga_em'], 'estado registrado com data', fe['folha_paga_em'])
-ok(fe['financeiro']['a_pagar'] == 0, 'a pagar zerou', fe['financeiro']['a_pagar'])
-
-print('== O HISTÓRICO NÃO PODE MUDAR ==')
-ok(fe['financeiro']['folha'] == 1920.0, 'folha continua no relatório', fe['financeiro']['folha'])
 ok(fe['financeiro']['custo_semana'] == custo_original, 'custo da semana intacto',
    (fe['financeiro']['custo_semana'], custo_original))
-ok(len(fe['folha_detalhada']) == 2, 'folha por profissional preservada', len(fe['folha_detalhada']))
 horas = c.get(f"/api/dias/{DIA}/horas").get_json()
-ok(len(horas) == 2, 'as horas lançadas NÃO foram apagadas', horas)
-tot = c.get(f'/api/dias/{DIA}/totais').get_json()
-ok(tot['folha'] == 384.0, 'total do dia continua o mesmo', tot)
+ok(len(horas) == 2 and 'valor_hora' not in horas[str(f1)], 'ponto sem valores', horas)
+
+print('== FOLHA DE SEMANA ANTIGA É PRESERVADA ==')
+# Simula um ponto lançado quando o profissional ainda tinha valor/hora.
+from obra.db import executar
+with app.app_context():
+    executar("UPDATE horas SET valor_hora = 25 WHERE dia_id = ?", (DIA,))
+fin = c.get(f'/api/semanas/{S}/fechamento').get_json()['financeiro']
+ok(fin['folha'] == 400.0, 'folha antiga continua no fechamento', fin['folha'])
+c.put(f"/api/dias/{DIA}/horas", json={'registros':[
+    {'funcionario_id':f1,'horas':9},{'funcionario_id':f2,'horas':8}]}, headers=H)
+fin = c.get(f'/api/semanas/{S}/fechamento').get_json()['financeiro']
+ok(fin['folha'] == 425.0, 'reeditar o dia mantém o valor/hora da época', fin['folha'])
+custo_original = fin['custo_semana']
+c.put(f'/api/semanas/{S}', json={'fechada': False}, headers=H)
+r = c.put(f'/api/semanas/{S}', json={'fechada': True}, headers=H)
+ok(r.get_json()['folha']['valor'] == 425.0, 'fechar quita a folha antiga', r.get_json()['folha'])
 
 print('== NÃO AFETA OS OUTROS CUSTOS ==')
 r = c.post(f'/api/obras/{O}/locacoes', json={'equipamento':'Andaime','valor_parcela':391,
@@ -112,7 +129,7 @@ print('== REABRIR A FOLHA ==')
 r = c.delete(f'/api/semanas/{S}/folha/pagar', headers=H)
 ok(r.status_code == 200, 'desfazer a quitação', r.get_json())
 fin = c.get(f'/api/semanas/{S}/fechamento').get_json()['financeiro']
-ok(fin['a_pagar'] == 700.0 + 1920.0, 'folha volta a contar como pendente', fin['a_pagar'])
+ok(fin['a_pagar'] == 700.0 + 425.0, 'folha volta a contar como pendente', fin['a_pagar'])
 
 print('== QUITAR SEM FECHAR ==')
 r = c.post(f'/api/semanas/{S2}/folha/pagar', json={}, headers=H)

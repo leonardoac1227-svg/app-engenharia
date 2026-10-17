@@ -1,26 +1,17 @@
 # -*- coding: utf-8 -*-
-"""Obras (centros de custo), dashboard e etapas do cronograma."""
+"""Obras (centros de custo) e dashboard."""
 
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
 from ..db import executar, registrar_auditoria, todos, um
-from ..security import (garantir_acesso_obra, login_obrigatorio, obra_da_etapa, obras_permitidas,
+from ..security import (garantir_acesso_obra, login_obrigatorio, obras_permitidas,
                         papel_obrigatorio, usuario_atual)
 from ..services.fechamento import dashboard_obra
 from ..utils import ApiErro, agora_iso, data_iso, hoje_iso, numero, texto
 
 bp = Blueprint("obras", __name__, url_prefix="/api")
-
-# Modelo de EAP para obra residencial — evita a página em branco na hora de
-# montar o cronograma. Pesos somam 100.
-MODELO_ETAPAS = [
-    ("Serviços preliminares", 5), ("Fundação", 12), ("Estrutura", 20),
-    ("Alvenaria", 12), ("Cobertura", 8), ("Instalações elétricas", 7),
-    ("Instalações hidráulicas", 7), ("Revestimentos", 12),
-    ("Esquadrias", 6), ("Pintura e acabamento", 8), ("Limpeza e entrega", 3),
-]
 
 
 @bp.get("/obras")
@@ -136,88 +127,3 @@ def dashboard(obra_id: int):
             dados["semana_atual"]["financeiro"] = {}
     return jsonify(dados)
 
-
-# ---------------------------------------------------------------- etapas
-
-@bp.get("/obras/<int:obra_id>/etapas")
-@login_obrigatorio
-def listar_etapas(obra_id: int):
-    garantir_acesso_obra(obra_id)
-    rows = todos(
-        """SELECT id, nome, ordem, peso, percentual, custo_previsto
-             FROM etapas WHERE obra_id = ? ORDER BY ordem, id""", (obra_id,))
-    etapas = [dict(r) for r in rows]
-
-    # Custo já realizado por etapa (despesas vinculadas), para o previsto x
-    # realizado financeiro por etapa do cronograma.
-    realizados = {r["etapa_id"]: r["t"] for r in todos(
-        """SELECT x.etapa_id, COALESCE(SUM(x.valor), 0) AS t
-             FROM despesas x
-             JOIN dias d ON d.id = x.dia_id
-             JOIN semanas s ON s.id = d.semana_id
-            WHERE s.obra_id = ? AND x.etapa_id IS NOT NULL GROUP BY x.etapa_id""", (obra_id,))}
-    for e in etapas:
-        e["custo_realizado"] = round(realizados.get(e["id"], 0) or 0, 2)
-    return jsonify(etapas)
-
-
-@bp.post("/obras/<int:obra_id>/etapas")
-@papel_obrigatorio("gestor")
-def criar_etapa(obra_id: int):
-    garantir_acesso_obra(obra_id)
-    dados = request.get_json(silent=True) or {}
-
-    if dados.get("modelo"):  # cria a EAP padrão de uma vez
-        ordem = um("SELECT COALESCE(MAX(ordem), 0) AS m FROM etapas WHERE obra_id = ?", (obra_id,))["m"]
-        for nome, peso in MODELO_ETAPAS:
-            ordem += 1
-            executar(
-                """INSERT INTO etapas (obra_id, nome, ordem, peso, percentual, custo_previsto, criado_em)
-                   VALUES (?, ?, ?, ?, 0, 0, ?)""",
-                (obra_id, nome, ordem, peso, agora_iso()))
-        registrar_auditoria(usuario_atual(), "criou_etapas_modelo", "obra", obra_id)
-        return jsonify({"ok": True, "criadas": len(MODELO_ETAPAS)}), 201
-
-    nome = texto(dados.get("nome"), 120, True, "o nome da etapa")
-    ordem = um("SELECT COALESCE(MAX(ordem), 0) AS m FROM etapas WHERE obra_id = ?", (obra_id,))["m"] + 1
-    cur = executar(
-        """INSERT INTO etapas (obra_id, nome, ordem, peso, percentual, custo_previsto, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (obra_id, nome, ordem,
-         numero(dados.get("peso"), 0, 0, 100, "o peso"),
-         numero(dados.get("percentual"), 0, 0, 100, "o percentual"),
-         numero(dados.get("custo_previsto"), 0, 0, campo="o custo previsto"),
-         agora_iso()),
-    )
-    return jsonify({"id": cur.lastrowid}), 201
-
-
-@bp.put("/etapas/<int:etapa_id>")
-@papel_obrigatorio("gestor")
-def atualizar_etapa(etapa_id: int):
-    obra_da_etapa(etapa_id)
-    dados = request.get_json(silent=True) or {}
-    mapa = {
-        "nome": lambda v: texto(v, 120, True, "o nome da etapa"),
-        "peso": lambda v: numero(v, 0, 0, 100, "o peso"),
-        "percentual": lambda v: numero(v, 0, 0, 100, "o percentual"),
-        "custo_previsto": lambda v: numero(v, 0, 0, campo="o custo previsto"),
-        "ordem": lambda v: numero(v, 0, 0, campo="a ordem"),
-    }
-    campos, valores = [], []
-    for chave, conversor in mapa.items():
-        if chave in dados:
-            campos.append(f"{chave} = ?"); valores.append(conversor(dados[chave]))
-    if not campos:
-        raise ApiErro("Nada para atualizar.")
-    valores.append(etapa_id)
-    executar(f"UPDATE etapas SET {', '.join(campos)} WHERE id = ?", valores)
-    return jsonify({"ok": True})
-
-
-@bp.delete("/etapas/<int:etapa_id>")
-@papel_obrigatorio("gestor")
-def remover_etapa(etapa_id: int):
-    obra_da_etapa(etapa_id)
-    executar("DELETE FROM etapas WHERE id = ?", (etapa_id,))
-    return jsonify({"ok": True})

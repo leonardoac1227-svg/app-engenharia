@@ -1,9 +1,18 @@
 # -*- coding: utf-8 -*-
 """Nota parcelada: divisão exata, vencimentos, caixa e cancelamento."""
 import os, sys
+import os
+import sys
+import tempfile
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
 from datetime import date
-os.environ['DATA_DIR'] = '/tmp/parc_dados'
-sys.path.insert(0, '/home/claude/obra-erp')
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="obra-teste-"))
 from obra import create_app
 
 app = create_app(); c = app.test_client()

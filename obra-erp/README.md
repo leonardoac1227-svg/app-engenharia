@@ -1,4 +1,7 @@
-# Obra ERP · v2
+# Obra ERP · v3
+
+> **v3.0.0** — revisão de ponta a ponta de segurança e desempenho.
+> O que foi encontrado, medido e corrigido está em **[AUDITORIA.md](AUDITORIA.md)**.
 
 Diário de obra, folha de mão de obra e caixa de canteiro — lançados do celular,
 no pé da obra, e fechados em um PDF que pode ir direto para o cliente.

@@ -18,6 +18,9 @@ from __future__ import annotations
 
 import logging
 import sqlite3
+import threading
+import time
+from collections import deque
 from datetime import datetime, timedelta
 
 from flask import g
@@ -31,6 +34,20 @@ log = logging.getLogger("obra-erp")
 SCHEMA_VERSION = 13
 
 EH_POSTGRES = config.BACKEND == "postgres"
+
+# Erros que indicam "a conexão não existe mais", e não "a consulta está errada".
+_SINAIS_DE_CONEXAO_MORTA = (
+    "connection is closed", "server closed the connection", "connection already closed",
+    "terminating connection", "SSL connection has been closed", "consuming input failed",
+    "no connection to the server", "EOF detected",
+)
+
+
+def _parece_conexao_morta(erro: Exception) -> bool:
+    texto_erro = f"{type(erro).__name__}: {erro}".lower()
+    if "interfaceerror" in texto_erro or "operationalerror" in texto_erro:
+        return True
+    return any(sinal.lower() in texto_erro for sinal in _SINAIS_DE_CONEXAO_MORTA)
 
 
 # ---------------------------------------------------------------- driver PG
@@ -104,16 +121,41 @@ class _ResultadoPG:
 class Conexao:
     """Fachada única sobre sqlite3.Connection e a conexão do psycopg."""
 
-    def __init__(self, bruta, postgres: bool):
+    def __init__(self, bruta, postgres: bool, reaproveitada: bool = False):
         self.bruta = bruta
         self.postgres = postgres
+        self.reaproveitada = reaproveitada   # veio do pool
+        self.quebrada = False                 # não deve voltar para o pool
 
     def execute(self, sql: str, args=()):
         if not self.postgres:
             return self.bruta.execute(sql, args)
+
         traduzido = para_postgres(sql)
+        try:
+            return self._executar_postgres(traduzido, args)
+        except Exception as erro:
+            # Conexão guardada no pool pode ter sido encerrada do outro lado
+            # sem aviso. Nesse caso — e só nele — abrimos outra e repetimos.
+            # Vale apenas para a primeira consulta da requisição: depois disso
+            # já pode haver trabalho na transação, e repetir seria perigoso.
+            if not (self.reaproveitada and _parece_conexao_morta(erro)):
+                self.quebrada = True
+                raise
+
+            log.info("Conexão do pool estava morta; reconectando.")
+            try:
+                self.bruta.close()
+            except Exception:
+                pass
+            self.bruta = _conectar_postgres()
+            self.reaproveitada = False
+            return self._executar_postgres(traduzido, args)
+
+    def _executar_postgres(self, traduzido: str, args):
         cursor = self.bruta.cursor()
         cursor.execute(traduzido, tuple(args))
+        self.reaproveitada = False   # a partir daqui a conexão já provou que vive
         return _ResultadoPG(cursor, traduzido)
 
     def commit(self):
@@ -129,12 +171,67 @@ class Conexao:
         self.bruta.close()
 
 
+# ---------------------------------------------------------------- pool
+#
+# Abrir uma conexão nova a cada requisição é o maior custo isolado do app em
+# produção: o aperto de mão com o pooler do Supabase leva mais tempo que todas
+# as consultas da tela somadas. Aqui as conexões ficam guardadas e são
+# reaproveitadas entre requisições do mesmo processo.
+#
+# É um pool deliberadamente simples — sem fila de espera nem timeout global.
+# Quando o limite é atingido, abre-se uma conexão avulsa que é fechada no fim:
+# degrada em vez de travar, que é o comportamento certo para um app onde três
+# pessoas mexem ao mesmo tempo.
+
+_POOL: deque = deque()
+_POOL_LOCK = threading.Lock()
+POOL_MAX = int(config.variavel("DB_POOL_MAX", "4") or 4)
+IDADE_MAXIMA = 120.0   # segundos ocioso; acima disso a conexão pode ter morrido
+
+
+def _pegar_do_pool():
+    agora = time.time()
+    with _POOL_LOCK:
+        while _POOL:
+            conexao, guardada_em = _POOL.popleft()
+            if agora - guardada_em < IDADE_MAXIMA:
+                return conexao
+            try:
+                conexao.close()   # ociosa demais: o servidor pode já ter desligado
+            except Exception:
+                pass
+    return None
+
+
+def _devolver_ao_pool(conexao) -> bool:
+    with _POOL_LOCK:
+        if len(_POOL) >= POOL_MAX:
+            return False
+        _POOL.append((conexao, time.time()))
+        return True
+
+
+def _conexao_postgres_reaproveitada():
+    """Conexão pronta para uso, do pool ou nova.
+
+    A conexão guardada pode ter sido encerrada do outro lado sem aviso. Em vez
+    de pagar um `SELECT 1` de verificação a cada requisição (que anularia boa
+    parte do ganho), testamos na prática: se a primeira consulta falhar por
+    conexão morta, `Conexao.execute` abre outra e repete uma única vez.
+    """
+    reaproveitada = _pegar_do_pool()
+    if reaproveitada is not None:
+        return reaproveitada, True
+    return _conectar_postgres(), False
+
+
 # ---------------------------------------------------------------- conexão
 
 def get_db() -> Conexao:
     if "db" not in g:
         if EH_POSTGRES:
-            g.db = Conexao(_conectar_postgres(), True)
+            bruta, do_pool = _conexao_postgres_reaproveitada()
+            g.db = Conexao(bruta, True, reaproveitada=do_pool)
         else:
             bruta = sqlite3.connect(config.DB_PATH, timeout=15)
             bruta.row_factory = sqlite3.Row
@@ -146,6 +243,21 @@ def get_db() -> Conexao:
 
 def fechar_db(_exc=None) -> None:
     db = g.pop("db", None)
+    if db is None:
+        return
+
+    if db.postgres:
+        # Devolve ao pool em estado limpo. Se o pool estiver cheio — ou a
+        # conexão tiver dado problema —, fecha de vez.
+        db.rollback()
+        if not db.quebrada and _devolver_ao_pool(db.bruta):
+            return
+        try:
+            db.close()
+        except Exception:
+            pass
+        return
+
     if db is not None:
         # No Postgres, uma transação abortada precisa de rollback antes de
         # devolver a conexão; no SQLite o rollback é inofensivo.

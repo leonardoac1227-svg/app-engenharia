@@ -124,6 +124,8 @@ SUPABASE_SERVICE_KEY = variavel("SUPABASE_SERVICE_KEY")
 SUPABASE_BUCKET = variavel("SUPABASE_BUCKET", "anexos").strip("/") or "anexos"
 SUPABASE_URL_VALIDADE = int(variavel("SUPABASE_URL_VALIDADE", "3600") or 3600)  # segundos
 
+FORCE_HTTPS = variavel("FORCE_HTTPS", "0") == "1"
+
 STORAGE = "supabase" if (SUPABASE_URL and SUPABASE_SERVICE_KEY) else "local"
 
 

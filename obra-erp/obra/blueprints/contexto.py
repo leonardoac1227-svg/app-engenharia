@@ -2,7 +2,7 @@
 """Contexto — tudo que o app precisa para abrir, numa requisição só.
 
 Abrir o aplicativo custava sete idas ao servidor, quatro delas em fila: sessão,
-lista de obras, funcionários, etapas, semanas e dias. Cada uma dessas idas é
+lista de obras, funcionários, semanas e dias. Cada uma dessas idas é
 uma viagem completa até o Render e de lá até o Supabase; no 4G do canteiro,
 com 300 ms de ida e volta, são mais de dois segundos olhando para o esqueleto
 da tela — sem que o servidor tenha trabalhado quase nada.
@@ -66,34 +66,11 @@ def _semanas_da_obra(obra_id: int) -> list[dict]:
 def _funcionarios_da_obra(obra_id: int, papel: str) -> list[dict]:
     funcionarios = []
     for linha in todos(
-        """SELECT id, nome, funcao, valor_hora, documento, telefone, ativo,
-                  tipo_contrato, chave_pix
+        """SELECT id, nome, funcao, documento, telefone, ativo, chave_pix
              FROM funcionarios WHERE obra_id = ? AND ativo = 1
              ORDER BY nome COLLATE NOCASE""", (obra_id,)):
-        item = dict(linha)
-        item["por_producao"] = item.get("tipo_contrato") == "producao"
-        if papel != "gestor":
-            item["valor_hora"] = None
-        funcionarios.append(item)
+        funcionarios.append(dict(linha))
     return funcionarios
-
-
-def _etapas_da_obra(obra_id: int) -> list[dict]:
-    etapas = [dict(linha) for linha in todos(
-        """SELECT id, nome, ordem, peso, percentual, custo_previsto
-             FROM etapas WHERE obra_id = ? ORDER BY ordem, id""", (obra_id,))]
-    if not etapas:
-        return []
-
-    realizados = {linha["etapa_id"]: linha["t"] for linha in todos(
-        """SELECT x.etapa_id, COALESCE(SUM(x.valor), 0) AS t
-             FROM despesas x
-             JOIN dias d ON d.id = x.dia_id
-             JOIN semanas s ON s.id = d.semana_id
-            WHERE s.obra_id = ? AND x.etapa_id IS NOT NULL GROUP BY x.etapa_id""", (obra_id,))}
-    for etapa in etapas:
-        etapa["custo_realizado"] = round(realizados.get(etapa["id"], 0) or 0, 2)
-    return etapas
 
 
 def _contexto_da_obra(obra_id: int, papel: str, semana_id: int | None = None) -> dict:
@@ -113,7 +90,6 @@ def _contexto_da_obra(obra_id: int, papel: str, semana_id: int | None = None) ->
     return {
         "obra": dict(um("SELECT * FROM obras WHERE id = ?", (obra_id,)) or {}),
         "funcionarios": _funcionarios_da_obra(obra_id, papel),
-        "etapas": _etapas_da_obra(obra_id),
         "semanas": semanas,
         "semana_id": alvo["id"] if alvo else None,
         "dias": dias,
@@ -131,6 +107,7 @@ def inicio():
     """
     from .. import __version__
     from ..security import token_csrf
+    from .auth import _usuario_publico
 
     usuario = usuario_atual()
     incluir_arquivadas = request.args.get("arquivadas") == "1"
@@ -141,10 +118,9 @@ def inicio():
 
     resposta = {
         "autenticado": True,
-        "usuario": {
-            "id": usuario["id"], "nome": usuario["nome"], "email": usuario["email"],
-            "papel": usuario["papel"], "senha_provisoria": bool(usuario.get("senha_provisoria")),
-        },
+        # Mesmo formato de /api/sessao: sem os campos pode_*, a tela escondia
+        # o Caixa, o "Nova obra" e o botão de lançamento até do gestor.
+        "usuario": _usuario_publico(usuario),
         "csrf": token_csrf(),
         "versao": __version__,
         "obras": obras,

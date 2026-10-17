@@ -27,28 +27,86 @@ PODE_FINANCEIRO = {"gestor"}
 PODE_LANCAR = {"gestor", "mestre"}
 METODOS_INSEGUROS = {"POST", "PUT", "PATCH", "DELETE"}
 
-# Freio simples contra força bruta no login (por IP, em memória do processo).
+# ---------------------------------------------------------------- força bruta
+#
+# Freio contra tentativa em massa no login. Duas chaves, de propósito:
+#
+# - **por origem** (IP), que segura um atacante único martelando vários e-mails;
+# - **por conta**, que segura a tentativa distribuída — vinda de muitos IPs,
+#   como acontece com botnet. Sem essa segunda chave, bastava variar a origem
+#   para o limite virar enfeite.
+#
+# O contador vive na memória do processo: com vários workers do gunicorn, cada
+# um tem o seu, então o limite efetivo é multiplicado pelo número de workers.
+# Isso é aceitável para o porte do app e continua tornando a força bruta
+# inviável; a alternativa (contador compartilhado no banco) custaria uma
+# escrita por tentativa.
+
 _TENTATIVAS: dict[str, list[float]] = {}
 MAX_TENTATIVAS = 8
+MAX_POR_CONTA = 12
 JANELA_SEGUNDOS = 300
+MAX_CHAVES = 5_000        # teto de memória: além disso, a tabela é podada
 
 
-def registrar_tentativa(ip: str) -> None:
+def _podar(agora: float) -> None:
+    """Remove chaves vencidas — sem isso o dicionário cresce sem limite.
+
+    Cada tentativa com origem diferente criava uma entrada permanente: 500
+    requisições viravam 500 chaves que nunca saíam da memória. Num ataque
+    sustentado, isso derruba o processo por consumo de RAM antes de qualquer
+    senha ser descoberta.
+    """
+    vencidas = [chave for chave, marcas in _TENTATIVAS.items()
+                if not marcas or agora - marcas[-1] >= JANELA_SEGUNDOS]
+    for chave in vencidas:
+        _TENTATIVAS.pop(chave, None)
+
+    if len(_TENTATIVAS) > MAX_CHAVES:
+        # Situação anômala (ataque em curso): fica com as mais recentes.
+        recentes = sorted(_TENTATIVAS.items(), key=lambda kv: kv[1][-1], reverse=True)
+        _TENTATIVAS.clear()
+        _TENTATIVAS.update(dict(recentes[:MAX_CHAVES // 2]))
+
+
+def _marcar(chave: str, agora: float) -> list[float]:
+    marcas = [t for t in _TENTATIVAS.get(chave, []) if agora - t < JANELA_SEGUNDOS]
+    _TENTATIVAS[chave] = marcas
+    return marcas
+
+
+def origem_da_requisicao() -> str:
+    """Endereço de quem está chamando.
+
+    Usa `remote_addr`, que o ProxyFix preenche a partir do último salto
+    confiável. Ler `X-Forwarded-For` direto do cabeçalho seria um convite:
+    qualquer cliente pode inventar o valor e ganhar um contador novo a cada
+    tentativa, anulando o limite.
+    """
+    return request.remote_addr or "desconhecido"
+
+
+def registrar_tentativa(origem: str, email: str = "") -> None:
     agora = time.time()
-    tentativas = [t for t in _TENTATIVAS.get(ip, []) if agora - t < JANELA_SEGUNDOS]
-    tentativas.append(agora)
-    _TENTATIVAS[ip] = tentativas
+    _podar(agora)
+    for chave in filter(None, (f"ip:{origem}", f"conta:{email.lower()}" if email else "")):
+        marcas = _marcar(chave, agora)
+        marcas.append(agora)
 
 
-def limpar_tentativas(ip: str) -> None:
-    _TENTATIVAS.pop(ip, None)
+def limpar_tentativas(origem: str, email: str = "") -> None:
+    _TENTATIVAS.pop(f"ip:{origem}", None)
+    if email:
+        _TENTATIVAS.pop(f"conta:{email.lower()}", None)
 
 
-def bloqueado(ip: str) -> bool:
+def bloqueado(origem: str, email: str = "") -> bool:
     agora = time.time()
-    tentativas = [t for t in _TENTATIVAS.get(ip, []) if agora - t < JANELA_SEGUNDOS]
-    _TENTATIVAS[ip] = tentativas
-    return len(tentativas) >= MAX_TENTATIVAS
+    if len(_marcar(f"ip:{origem}", agora)) >= MAX_TENTATIVAS:
+        return True
+    if email and len(_marcar(f"conta:{email.lower()}", agora)) >= MAX_POR_CONTA:
+        return True
+    return False
 
 
 # ---------------------------------------------------------------- sessão
@@ -201,16 +259,3 @@ def obra_do_funcionario(funcionario_id: int) -> int:
         raise ApiErro("Funcionário não encontrado.", 404)
     return garantir_acesso_obra(row["obra_id"])
 
-
-def obra_da_etapa(etapa_id: int) -> int:
-    row = um("SELECT obra_id FROM etapas WHERE id = ?", (etapa_id,))
-    if not row:
-        raise ApiErro("Etapa não encontrada.", 404)
-    return garantir_acesso_obra(row["obra_id"])
-
-
-def obra_da_meta(meta_id: int) -> int:
-    row = um("SELECT obra_id FROM metas WHERE id = ?", (meta_id,))
-    if not row:
-        raise ApiErro("Meta não encontrada.", 404)
-    return garantir_acesso_obra(row["obra_id"])

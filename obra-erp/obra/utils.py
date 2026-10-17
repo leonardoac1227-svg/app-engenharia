@@ -146,6 +146,26 @@ def extensao(nome: str) -> str:
     return nome.rsplit(".", 1)[-1].lower() if "." in (nome or "") else ""
 
 
+ASSINATURAS = {
+    "pdf": (b"%PDF",),
+    "jpg": (b"\xff\xd8\xff",),
+    "jpeg": (b"\xff\xd8\xff",),
+    "png": (b"\x89PNG\r\n\x1a\n",),
+    "webp": (b"RIFF",),
+    "gif": (b"GIF87a", b"GIF89a"),
+}
+
+
+def _conteudo_confere(dados: bytes, extensao_declarada: str) -> bool:
+    """Confere a assinatura (magic number) contra a extensão informada."""
+    assinaturas = ASSINATURAS.get(extensao_declarada)
+    if not assinaturas:
+        return True   # extensão que não sabemos verificar: a lista branca já filtrou
+    if extensao_declarada == "webp":
+        return dados[:4] == b"RIFF" and dados[8:12] == b"WEBP"
+    return any(dados.startswith(assinatura) for assinatura in assinaturas)
+
+
 def salvar_anexo(arquivo, apenas_imagem: bool = False) -> dict | None:
     """Salva um upload em DATA_DIR/uploads (ou no bucket) e devolve os metadados.
 
@@ -169,6 +189,14 @@ def salvar_anexo(arquivo, apenas_imagem: bool = False) -> dict | None:
     dados_originais = arquivo.stream.read()
     if not dados_originais:
         return None
+
+    # A extensão é escolhida por quem envia e não prova nada. Aqui conferimos
+    # a assinatura real do arquivo: um executável renomeado para .jpg é
+    # recusado, em vez de ficar guardado esperando alguém baixar e abrir.
+    if not _conteudo_confere(dados_originais, ext):
+        raise ApiErro(
+            "O conteúdo do arquivo não corresponde à extensão. "
+            "Envie uma imagem (JPG, PNG, WEBP) ou um PDF de verdade.")
 
     dados, relatorio = otimizar(dados_originais, ext)
 

@@ -18,13 +18,54 @@ export class ErroApi extends Error {
   }
 }
 
+/* --------------------------------------------------------------------------
+   Cache curto de leitura.
+
+   Trocar de aba refazia todas as consultas da tela. No wifi do escritório
+   ninguém nota; no 4G do canteiro é um segundo de espera para ver dado que
+   acabou de chegar. Aqui a resposta de um GET vale por alguns segundos.
+
+   A validade é curta de propósito, e **qualquer gravação limpa o cache
+   inteiro**: é melhor refazer uma consulta à toa do que mostrar um saldo
+   desatualizado logo depois de lançar uma despesa.
+   -------------------------------------------------------------------------- */
+
+const CACHE = new Map();
+const VALIDADE = 12_000;   // ms
+
+export function limparCache() {
+  CACHE.clear();
+}
+
+function doCache(caminho) {
+  const guardado = CACHE.get(caminho);
+  if (!guardado) return null;
+  if (Date.now() - guardado.em > VALIDADE) {
+    CACHE.delete(caminho);
+    return null;
+  }
+  // Cópia: quem recebe pode alterar o objeto sem contaminar o cache.
+  return JSON.parse(JSON.stringify(guardado.dados));
+}
+
 async function requisicao(caminho, opcoes = {}) {
-  const { silencioso = false, ...init } = opcoes;
+  const { silencioso = false, semCache = false, ...init } = opcoes;
   init.headers = init.headers || {};
   if (!['GET', 'HEAD'].includes((init.method || 'GET').toUpperCase())) {
     init.headers['X-CSRF-Token'] = csrf;
   }
   init.credentials = 'same-origin';
+
+  const metodo = (init.method || 'GET').toUpperCase();
+  const podeUsarCache = metodo === 'GET' && !semCache;
+
+  if (podeUsarCache) {
+    const guardado = doCache(caminho);
+    if (guardado !== null) return guardado;
+  } else if (metodo !== 'GET') {
+    // Escreveu: tudo que estava guardado pode ter ficado velho.
+    limparCache();
+  }
 
   let resposta;
   try {
@@ -59,8 +100,15 @@ async function requisicao(caminho, opcoes = {}) {
   }
 
   if (resposta.status === 204) return null;
+
   const tipo = resposta.headers.get('content-type') || '';
-  return tipo.includes('application/json') ? resposta.json() : resposta;
+  if (!tipo.includes('application/json')) return resposta;
+
+  const dados = await resposta.json();
+  if (podeUsarCache && dados && typeof dados === 'object') {
+    CACHE.set(caminho, { dados, em: Date.now() });
+  }
+  return dados;
 }
 
 export const api = {

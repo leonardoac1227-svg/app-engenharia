@@ -1,5 +1,5 @@
 /* ==========================================================================
-   AJUSTES — perfil, dados da obra, cronograma de etapas, usuários e auditoria.
+   AJUSTES — perfil, dados da obra, usuários e auditoria.
    ========================================================================== */
 
 import { api } from '../api.js';
@@ -7,12 +7,12 @@ import { estado, podeAdministrar } from '../estado.js';
 import { navegar, recarregarObra } from '../navegacao.js';
 import {
   abrirModal, confirmar, dataHoraBR, esc, esqueleto, fecharModal, formularioModal, moeda,
-  num, toast, vazio,
+  num, toast,
 } from '../util.js';
 
 const PAPEIS = [
   { valor: 'gestor', texto: 'Gestor / Engenheiro — acesso total' },
-  { valor: 'mestre', texto: 'Mestre de obra — RDO e ponto, sem financeiro' },
+  { valor: 'mestre', texto: 'Mestre de obra — fotos e ponto, sem financeiro' },
   { valor: 'cliente', texto: 'Cliente / Síndico — somente leitura' },
 ];
 
@@ -20,15 +20,13 @@ export async function renderizar(raiz) {
   raiz.innerHTML = esqueleto(3);
 
   const admin = podeAdministrar();
-  const [obra, etapas, usuarios, auditoria] = await Promise.all([
+  const [obra, usuarios, auditoria] = await Promise.all([
     estado.obraId ? api.get(`/api/obras/${estado.obraId}`) : Promise.resolve(null),
-    estado.obraId ? api.get(`/api/obras/${estado.obraId}/etapas`) : Promise.resolve([]),
     admin ? api.get('/api/usuarios') : Promise.resolve([]),
     admin ? api.get('/api/auditoria?limite=15') : Promise.resolve([]),
   ]);
 
   const usuario = estado.usuario;
-  const pesoTotal = etapas.reduce((s, e) => s + e.peso, 0);
 
   raiz.innerHTML = `
     <div class="section-head"><div><span class="eyebrow">CONFIGURAÇÃO</span><h2>Ajustes</h2></div></div>
@@ -69,41 +67,6 @@ export async function renderizar(raiz) {
         </div>
       </div>` : ''}
 
-    <!-- ---------------- etapas ---------------- -->
-    ${estado.obraId ? `
-      <div class="section-head"><h3>Cronograma de etapas</h3>
-        ${admin ? '<button class="btn btn-outline btn-small" data-acao="nova-etapa">+ Etapa</button>' : ''}
-      </div>
-      ${etapas.length ? `
-        <div class="card">
-          <p class="small muted">Peso = participação da etapa na obra (soma ideal: 100).
-          O avanço físico do painel é a média ponderada pelos pesos.
-          ${pesoTotal !== 100 ? `<b style="color:var(--amber)"> Soma atual: ${num(pesoTotal, 1)}.</b>` : ''}</p>
-          ${etapas.map((e) => `
-            <div style="margin:14px 0">
-              <div class="progresso-legenda" style="margin:0 0 5px">
-                <span style="color:var(--text)">${esc(e.nome)}</span>
-                <span>${num(e.percentual, 0)}% · peso ${num(e.peso, 0)}</span>
-              </div>
-              <div class="progresso-trilho"><div class="progresso-preenchido" style="width:${Math.min(e.percentual, 100)}%"></div></div>
-              <div class="row-between" style="margin-top:6px">
-                <span class="item-sub">
-                  ${e.custo_previsto ? `previsto ${moeda(e.custo_previsto)} · ` : ''}realizado ${moeda(e.custo_realizado)}
-                  ${e.custo_previsto && e.custo_realizado > e.custo_previsto ? ' ⚠' : ''}
-                </span>
-                ${admin ? `<span class="item-acoes">
-                  <button class="icon-mini" data-editar-etapa="${e.id}">✎</button>
-                  <button class="icon-mini" data-remover-etapa="${e.id}">🗑</button>
-                </span>` : ''}
-              </div>
-            </div>`).join('')}
-        </div>` : `
-        <div class="card">
-          <p class="small muted">Nenhuma etapa cadastrada. O cronograma habilita o avanço físico
-          (curva de progresso) e o custo por etapa.</p>
-          ${admin ? '<button class="btn btn-brass" data-acao="modelo-etapas">Usar modelo de obra residencial</button>' : ''}
-        </div>`}` : ''}
-
     <!-- ---------------- usuários ---------------- -->
     ${admin ? `
       <div class="section-head"><h3>Usuários e acessos</h3>
@@ -124,7 +87,7 @@ export async function renderizar(raiz) {
           </div>`).join('')}
       </div>
       <p class="small faint" style="margin-top:10px">
-        O mestre de obra só enxerga RDO, fotos e ponto. O cliente enxerga avanço, fotos e fechamento,
+        O mestre de obra só enxerga fotos e ponto. O cliente enxerga fotos e fechamento,
         sem poder editar nada. Ambos precisam ser vinculados às obras que podem ver.
       </p>` : ''}
 
@@ -162,10 +125,10 @@ export async function renderizar(raiz) {
     </p>
   `;
 
-  ligarEventos(raiz, { obra, etapas, usuarios });
+  ligarEventos(raiz, { obra, usuarios });
 }
 
-function ligarEventos(raiz, { obra, etapas, usuarios }) {
+function ligarEventos(raiz, { obra, usuarios }) {
   const acao = (nome, fn) => {
     const btn = raiz.querySelector(`[data-acao=${nome}]`);
     if (btn) btn.onclick = fn;
@@ -214,54 +177,6 @@ function ligarEventos(raiz, { obra, etapas, usuarios }) {
     await api.put(`/api/obras/${estado.obraId}`, dados);
     toast('Obra atualizada.', 'ok');
     await recarregarObra({ manterAba: true });
-  });
-
-  acao('modelo-etapas', async () => {
-    await api.post(`/api/obras/${estado.obraId}/etapas`, { modelo: true });
-    toast('Cronograma criado. Ajuste os pesos e percentuais.', 'ok');
-    await renderizar(raiz);
-  });
-
-  acao('nova-etapa', async () => {
-    const dados = await formularioModal({
-      titulo: 'Nova etapa',
-      campos: [
-        { nome: 'nome', rotulo: 'Nome da etapa', placeholder: 'Ex: Estrutura' },
-        { nome: 'peso', rotulo: 'Peso na obra (%)', tipo: 'number' },
-        { nome: 'percentual', rotulo: 'Concluído (%)', tipo: 'number', valor: 0 },
-        { nome: 'custo_previsto', rotulo: 'Custo previsto (R$)', tipo: 'number' },
-      ],
-    });
-    if (!dados || !dados.nome.trim()) return;
-    await api.post(`/api/obras/${estado.obraId}/etapas`, dados);
-    await renderizar(raiz);
-  });
-
-  raiz.querySelectorAll('[data-editar-etapa]').forEach((btn) => {
-    btn.onclick = async () => {
-      const e = etapas.find((x) => String(x.id) === btn.dataset.editarEtapa);
-      const dados = await formularioModal({
-        titulo: e.nome,
-        campos: [
-          { nome: 'nome', rotulo: 'Nome', valor: e.nome },
-          { nome: 'percentual', rotulo: 'Concluído (%)', tipo: 'number', valor: e.percentual },
-          { nome: 'peso', rotulo: 'Peso na obra (%)', tipo: 'number', valor: e.peso },
-          { nome: 'custo_previsto', rotulo: 'Custo previsto (R$)', tipo: 'number', valor: e.custo_previsto },
-        ],
-      });
-      if (!dados) return;
-      await api.put(`/api/etapas/${e.id}`, dados);
-      await renderizar(raiz);
-    };
-  });
-
-  raiz.querySelectorAll('[data-remover-etapa]').forEach((btn) => {
-    btn.onclick = async () => {
-      const ok = await confirmar({ titulo: 'Remover esta etapa?', perigo: true, confirmar: 'Remover' });
-      if (!ok) return;
-      await api.del(`/api/etapas/${btn.dataset.removerEtapa}`);
-      await renderizar(raiz);
-    };
   });
 
   acao('novo-usuario', () => abrirModalUsuario(null, raiz));

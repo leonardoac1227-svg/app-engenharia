@@ -1,7 +1,15 @@
 # -*- coding: utf-8 -*-
 """Variáveis de ambiente coladas com 'enfeites' não podem derrubar o storage."""
 import importlib, os, sys
-sys.path.insert(0, '/home/claude/obra-erp')
+import os
+import sys
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
 
 falhas = []
 def ok(cond, msg, extra=''):

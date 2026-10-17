@@ -1,8 +1,17 @@
 # -*- coding: utf-8 -*-
 """Frete com várias viagens e a central de arquivos da semana."""
 import io, os, sys, zipfile
-os.environ['DATA_DIR'] = '/tmp/fa_dados'
-sys.path.insert(0, '/home/claude/obra-erp')
+import os
+import sys
+import tempfile
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="obra-teste-"))
 from PIL import Image
 from reportlab.pdfgen import canvas as pdfcanvas
 
