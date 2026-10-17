@@ -10,6 +10,7 @@ from ..security import (exigir_financeiro, exigir_lancamento, garantir_acesso_ob
                         login_obrigatorio, obra_da_foto,
                         obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
 from ..services.fechamento import garantir_dias, listar_dias
+from ..services.parcelamento import alocar_parcelas_agendadas, sql_fora_da_semana
 from ..utils import (ApiErro, formatar_bytes, agora_iso, data_iso, hoje_iso, numero, remover_anexo, salvar_anexo,
                      segunda_da_semana, somar_dias, texto)
 
@@ -75,9 +76,13 @@ def criar_semana(obra_id: int):
     )
     semana_nova = cur.lastrowid
     garantir_dias(semana_nova)
+    # Parcelas que vencem nesta semana estavam agendadas: passam a contar aqui.
+    parcelas = alocar_parcelas_agendadas(obra_id)
 
-    registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova, f"Semana {numero_novo}")
-    return jsonify({"id": semana_nova, "numero": numero_novo, "data_inicio": inicio}), 201
+    registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova,
+                        f"Semana {numero_novo}" + (f" · {parcelas} parcela(s) prevista(s)" if parcelas else ""))
+    return jsonify({"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
+                    "parcelas_previstas": parcelas}), 201
 
 
 @bp.put("/semanas/<int:semana_id>")
@@ -114,6 +119,8 @@ def atualizar_semana(semana_id: int):
     valores.append(semana_id)
     executar(f"UPDATE semanas SET {', '.join(campos)} WHERE id = ?", valores)
     garantir_dias(semana_id)  # realinha as datas dos dias se o início mudou
+    if "data_inicio" in dados:
+        alocar_parcelas_agendadas(obra_da_semana(semana_id))
 
     resposta = {"ok": True}
     if quitar_folha:
@@ -166,7 +173,9 @@ def totais_dia(dia_id: int):
     folha = um("""SELECT COALESCE(SUM(horas_trabalhadas * valor_hora), 0) AS t,
                          COALESCE(SUM(horas_trabalhadas), 0) AS h
                     FROM horas WHERE dia_id = ?""", (dia_id,))
-    despesas = um("SELECT COALESCE(SUM(valor), 0) AS t FROM despesas WHERE dia_id = ?", (dia_id,))
+    despesas = um(f"""SELECT COALESCE(SUM(x.valor), 0) AS t
+                         FROM despesas x JOIN dias d ON d.id = x.dia_id
+                        WHERE x.dia_id = ? AND NOT {sql_fora_da_semana()}""", (dia_id,))
     resposta = {"horas": round(folha["h"], 2), "folha": round(folha["t"], 2),
                 "despesas": round(despesas["t"], 2)}
     if usuario_atual()["papel"] == "mestre":

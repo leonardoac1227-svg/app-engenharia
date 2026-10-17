@@ -19,6 +19,7 @@ import re
 import zipfile
 
 from ..db import todos
+from .parcelamento import sql_fora_da_semana
 from ..utils import data_br
 
 PASTA_NOTAS = "notas-fiscais"
@@ -54,10 +55,11 @@ def listar_arquivos(semana_id: int) -> dict:
         "numero_nota": linha["numero_nota"] or "",
         "eh_pdf": str(linha["imagem_path"]).lower().endswith(".pdf"),
     } for linha in todos(
-        """SELECT x.id, x.descricao, x.fornecedor, x.categoria, x.valor, x.numero_nota,
+        f"""SELECT x.id, x.descricao, x.fornecedor, x.categoria, x.valor, x.numero_nota,
                   x.status_pagamento, x.imagem_path, x.nome_arquivo, d.data, d.dia_semana
              FROM despesas x JOIN dias d ON d.id = x.dia_id
             WHERE d.semana_id = ? AND x.imagem_path IS NOT NULL AND x.imagem_path != ''
+              AND NOT {sql_fora_da_semana()}
             ORDER BY d.data, x.id""", (semana_id,))]
 
     fotos = [{
