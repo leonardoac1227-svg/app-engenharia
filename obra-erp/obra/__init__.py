@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.1.0"
+__version__ = "3.1.1"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -67,6 +67,18 @@ def create_app() -> Flask:
     migrar()
 
     app.teardown_appcontext(fechar_db)
+
+    # Parcelas gravadas por versões anteriores numa semana que não é a do
+    # vencimento vão para o dia certo. Sem nada fora do lugar, não muda nada.
+    try:
+        from .services.parcelamento import alocar_parcelas_agendadas
+        with app.app_context():
+            movidas = alocar_parcelas_agendadas()
+        if movidas:
+            logging.getLogger(__name__).info(
+                "%d parcela(s) movida(s) para a semana do vencimento.", movidas)
+    except Exception:  # noqa: BLE001 — não pode impedir o app de subir
+        logging.getLogger(__name__).exception("Falha ao realocar parcelas.")
 
     # ------------------------------------------------------------ middlewares
 

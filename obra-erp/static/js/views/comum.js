@@ -63,7 +63,9 @@ export function ligarBarraSemana(raiz) {
 
       const nova = await api.post(`/api/obras/${estado.obraId}/semanas`, dados);
       estado.semanaId = nova.id;
-      toast('Semana criada.', 'ok');
+      toast(nova.parcelas_previstas
+        ? `Semana criada · ${nova.parcelas_previstas} parcela(s) com vencimento nela.`
+        : 'Semana criada.', 'ok');
       await recarregarSemana({ recarregarLista: true });
     };
   });

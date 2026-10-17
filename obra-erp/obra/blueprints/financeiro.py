@@ -16,7 +16,7 @@ from ..security import (exigir_financeiro, garantir_acesso_obra, login_obrigator
 from ..services.locacoes import criar_locacao
 from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
 from ..services.fretes import validar as validar_frete
-from ..services.parcelamento import gerar_parcelas, listar_grupo, remover_grupo
+from ..services.parcelamento import gerar_parcelas, listar_grupo, remover_grupo, sql_fora_da_semana
 from ..services.parcelamento import validar as validar_parcelamento
 from ..utils import (ApiErro, agora_iso, data_br, data_iso, formatar_bytes, hoje_iso, moeda,
                      numero, remover_anexo, salvar_anexo, somar_dias, texto)
@@ -102,11 +102,11 @@ def listar(dia_id: int):
     exigir_financeiro()
     obra_do_dia(dia_id)
     rows = todos(
-        """SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
+        f"""SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
                   x.numero_nota, x.grupo_parcela, x.grupo_tipo, x.parcela_numero, x.parcela_total,
                   x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo
-             FROM despesas x
-            WHERE x.dia_id = ? ORDER BY x.id DESC""", (dia_id,))
+             FROM despesas x JOIN dias d ON d.id = x.dia_id
+            WHERE x.dia_id = ? AND NOT {sql_fora_da_semana()} ORDER BY x.id DESC""", (dia_id,))
     return jsonify([_serializar(r) for r in rows])
 
 
@@ -364,10 +364,12 @@ def pagar_todas_da_semana(semana_id: int):
         status_alvo.append("Reembolso")
 
     marcas = ", ".join("?" for _ in status_alvo)
+    # Parcela agendada para uma semana futura não é conta desta semana.
     pendentes = todos(
         f"""SELECT x.id, x.valor FROM despesas x
               JOIN dias d ON d.id = x.dia_id
-             WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas})""",
+             WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas})
+               AND NOT {sql_fora_da_semana()}""",
         [semana_id, *status_alvo])
 
     if not pendentes:
@@ -378,7 +380,8 @@ def pagar_todas_da_semana(semana_id: int):
     executar(
         f"""UPDATE despesas SET status_pagamento = 'Pago', pago_em = ?
              WHERE id IN (SELECT x.id FROM despesas x JOIN dias d ON d.id = x.dia_id
-                           WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas}))""",
+                           WHERE d.semana_id = ? AND x.status_pagamento IN ({marcas})
+                             AND NOT {sql_fora_da_semana()})""",
         [hoje, semana_id, *status_alvo])
 
     total = round(sum(float(p["valor"] or 0) for p in pendentes), 2)

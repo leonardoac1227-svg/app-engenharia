@@ -16,6 +16,7 @@ from ..db import get_db, todos, um
 from ..utils import ApiErro, agora_iso, data_br, hoje_iso, somar_dias
 from .fretes import resumo_semana as resumo_fretes
 from .locacoes import alertas as alertas_locacoes
+from .parcelamento import sql_fora_da_semana
 
 INDICE_DIA = {nome: i for i, nome in enumerate(DIAS_SEMANA)}
 
@@ -66,8 +67,10 @@ def _totais_por_dia(dias_ids: list[int]) -> dict[int, dict]:
               FROM horas WHERE dia_id IN ({marcas}) GROUP BY dia_id""", dias_ids)}
 
     gastos = {r["dia_id"]: r for r in todos(
-        f"""SELECT dia_id, COALESCE(SUM(valor), 0) AS total, COUNT(*) AS quantidade
-              FROM despesas WHERE dia_id IN ({marcas}) GROUP BY dia_id""", dias_ids)}
+        f"""SELECT x.dia_id AS dia_id, COALESCE(SUM(x.valor), 0) AS total, COUNT(*) AS quantidade
+              FROM despesas x JOIN dias d ON d.id = x.dia_id
+             WHERE x.dia_id IN ({marcas}) AND NOT {sql_fora_da_semana()}
+             GROUP BY x.dia_id""", dias_ids)}
 
     fotos = {r["dia_id"]: r["t"] for r in todos(
         f"SELECT dia_id, COUNT(*) AS t FROM fotos WHERE dia_id IN ({marcas}) GROUP BY dia_id",
@@ -164,9 +167,10 @@ def dados_fechamento(semana_id: int) -> dict:
     por_status = {"Reembolso": 0.0, "Em Aberto": 0.0, "Pago": 0.0}
     if ids:
         for registro in todos(
-            f"""SELECT status_pagamento, COALESCE(SUM(valor), 0) AS t
-                  FROM despesas WHERE dia_id IN ({marcas})
-                 GROUP BY status_pagamento""", ids):
+            f"""SELECT x.status_pagamento AS status_pagamento, COALESCE(SUM(x.valor), 0) AS t
+                  FROM despesas x JOIN dias d ON d.id = x.dia_id
+                 WHERE x.dia_id IN ({marcas}) AND NOT {sql_fora_da_semana()}
+                 GROUP BY x.status_pagamento""", ids):
             por_status[registro["status_pagamento"]] = round(float(registro["t"] or 0), 2)
 
     reembolso = por_status.get("Reembolso", 0.0)
@@ -195,8 +199,9 @@ def dados_fechamento(semana_id: int) -> dict:
             f"""SELECT x.id, x.dia_id, x.categoria, x.descricao, x.fornecedor, x.valor,
                        x.status_pagamento, x.numero_nota, x.vencimento, x.pago_em, x.imagem_path,
                        x.nome_arquivo
-                  FROM despesas x
-                 WHERE x.dia_id IN ({marcas}) ORDER BY x.dia_id, x.id""", ids):
+                  FROM despesas x JOIN dias d ON d.id = x.dia_id
+                 WHERE x.dia_id IN ({marcas}) AND NOT {sql_fora_da_semana()}
+                 ORDER BY x.dia_id, x.id""", ids):
             item = dict(r)
             item["dia_semana"] = nome_por_id.get(r["dia_id"], "")
             item["data"] = data_por_id.get(r["dia_id"], "")
@@ -322,7 +327,8 @@ def dashboard_obra(obra_id: int) -> dict:
                        COALESCE(SUM(CASE WHEN x.status_pagamento = 'Reembolso'
                                          THEN x.valor ELSE 0 END), 0) AS reembolso
                   FROM despesas x JOIN dias d ON d.id = x.dia_id
-                 WHERE d.semana_id IN ({marcas}) GROUP BY d.semana_id""", semana_ids):
+                 WHERE d.semana_id IN ({marcas}) AND NOT {sql_fora_da_semana()}
+                 GROUP BY d.semana_id""", semana_ids):
             desp_por_semana[registro["semana_id"]] = registro["total"]
             aberto_por_semana[registro["semana_id"]] = registro["aberto"]
             reemb_por_semana[registro["semana_id"]] = registro["reembolso"]
@@ -343,6 +349,21 @@ def dashboard_obra(obra_id: int) -> dict:
                 "custo": custo,
                 "previsto": round(s["orcamento_previsto"] or 0, 2),
             })
+
+        # Parcelas agendadas para semanas ainda não criadas: ficam fora da
+        # série semanal, mas são dívida da obra e entram nos totais.
+        agendadas = um(
+            f"""SELECT COALESCE(SUM(x.valor), 0) AS total,
+                       COALESCE(SUM(CASE WHEN x.status_pagamento = 'Em Aberto'
+                                         THEN x.valor ELSE 0 END), 0) AS aberto,
+                       COALESCE(SUM(CASE WHEN x.status_pagamento = 'Reembolso'
+                                         THEN x.valor ELSE 0 END), 0) AS reembolso
+                  FROM despesas x JOIN dias d ON d.id = x.dia_id
+                 WHERE d.semana_id IN ({marcas}) AND {sql_fora_da_semana()}""", semana_ids)
+        despesas_total += round(agendadas["total"] or 0, 2)
+        gasto_total += round(agendadas["total"] or 0, 2)
+        a_pagar += round(agendadas["aberto"] or 0, 2)
+        reembolso_total += round(agendadas["reembolso"] or 0, 2)
 
     gasto_total = round(gasto_total, 2)
     orcamento = round(obra["orcamento_total"] or 0, 2)

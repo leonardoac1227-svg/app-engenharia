@@ -112,10 +112,73 @@ restantes = c.get(f"/api/despesas/{parcelas[1]['id']}/parcelas").get_json()
 ok(len(restantes) == 1 and restantes[0]['status_pagamento'] == 'Pago',
    'a parcela já paga continua no caixa', restantes)
 
+print('== CADA PARCELA NA SEMANA DO SEU VENCIMENTO ==')
+# Obra nova, semana 1 começando 03/08. Nota de R$ 900 em 3x mensais, 1º vencimento
+# na própria semana: 05/08, 05/09 e 05/10. As semanas de setembro e outubro
+# ainda não existem.
+O2 = c.post('/api/obras', json={'nome':'Obra Vencimentos'}, headers=H).get_json()['id']
+S1 = c.post(f'/api/obras/{O2}/semanas', json={'data_inicio':'2026-08-03'}, headers=H).get_json()['id']
+D1 = c.get(f'/api/semanas/{S1}/dias').get_json()[0]['id']
+r = c.post(f'/api/dias/{D1}/despesas', data={'categoria':'Material','descricao':'Porcelanato',
+    'fornecedor':'CASA DO PISO','valor':'900','status_pagamento':'Em Aberto','numero_nota':'5001',
+    'vencimento':'2026-08-05','parcelas':'3','parcela_frequencia':'mensal'},
+    headers=H, content_type='multipart/form-data')
+ok(r.status_code == 201, 'lançar nota em 3x', r.get_json())
+
+fe = c.get(f'/api/semanas/{S1}/fechamento').get_json()
+descricoes = [x['descricao'] for x in fe['despesas']]
+ok(descricoes == ['Porcelanato (1/3)'], 'semana do lançamento só tem a 1ª parcela', descricoes)
+ok(fe['financeiro']['em_aberto'] == 300.0, 'a pagar da semana é só a 1ª parcela',
+   fe['financeiro']['em_aberto'])
+ok(len(c.get(f'/api/dias/{D1}/despesas').get_json()) == 1, 'caixa do dia só mostra a 1ª parcela')
+fin = c.get(f'/api/obras/{O2}/financeiro').get_json()
+ok(fin['total_em_aberto'] == 900.0, 'contas a pagar da obra mostram as 3 parcelas',
+   fin['total_em_aberto'])
+dash = c.get(f'/api/obras/{O2}/dashboard').get_json()
+ok(dash['totais']['a_pagar'] == 900.0 and dash['totais']['gasto_total'] == 900.0,
+   'painel conta a dívida inteira', dash['totais'])
+ok(dash['serie_semanal'][0]['custo'] == 300.0, 'custo da semana 1 no gráfico é só a 1ª parcela',
+   dash['serie_semanal'])
+
+r = c.post(f'/api/semanas/{S1}/despesas/pagar-todas', json={}, headers=H)
+ok(r.get_json()['quitadas'] == 1 and r.get_json()['total'] == 300.0,
+   'baixa da semana não paga parcelas futuras', r.get_json())
+
+# Semanas pulando: a de setembro (31/08 a 06/09) é criada só agora.
+S5 = c.post(f'/api/obras/{O2}/semanas', json={'data_inicio':'2026-08-31'}, headers=H).get_json()
+ok(S5.get('parcelas_previstas') == 1, 'criar a semana avisa a parcela prevista', S5)
+fe5 = c.get(f'/api/semanas/{S5["id"]}/fechamento').get_json()
+ok([x['descricao'] for x in fe5['despesas']] == ['Porcelanato (2/3)'],
+   '2ª parcela já aparece na semana do vencimento', [x['descricao'] for x in fe5['despesas']])
+ok(fe5['despesas'][0]['data'] == '2026-09-05', 'no dia exato do vencimento', fe5['despesas'][0]['data'])
+ok(fe5['financeiro']['em_aberto'] == 300.0, 'entra no a pagar da semana nova', fe5['financeiro'])
+fe1 = c.get(f'/api/semanas/{S1}/fechamento').get_json()
+ok(len(fe1['despesas']) == 1, 'semana 1 continua só com a 1ª', [x['descricao'] for x in fe1['despesas']])
+r = c.get(f'/api/semanas/{S5["id"]}/pagamentos.xlsx')
+ok(r.status_code == 200, 'planilha de pagamento da semana nova gera', r.status_code)
+
+# Uma semana com a data errada, corrigida depois, também recebe a parcela.
+S9 = c.post(f'/api/obras/{O2}/semanas', json={'data_inicio':'2026-10-12'}, headers=H).get_json()
+ok(not S9.get('parcelas_previstas'), 'semana sem vencimento não recebe nada', S9)
+c.put(f'/api/semanas/{S9["id"]}', json={'data_inicio':'2026-10-05'}, headers=H)
+fe9 = c.get(f'/api/semanas/{S9["id"]}/fechamento').get_json()
+ok([x['descricao'] for x in fe9['despesas']] == ['Porcelanato (3/3)'],
+   'corrigir o início da semana puxa a parcela que vence nela', [x['descricao'] for x in fe9['despesas']])
+
+# Dado de versão anterior: a 2ª parcela gravada na semana 1, embora a semana
+# do vencimento exista. Ao subir o app, ela volta para o lugar certo.
+from obra.db import executar
+p2 = fe5['despesas'][0]['id']
+with app.app_context():
+    executar("UPDATE despesas SET dia_id = ? WHERE id = ?", (D1, p2))
+ok(not c.get(f'/api/semanas/{S5["id"]}/fechamento').get_json()['despesas'],
+   '(simulação) parcela antiga fora da semana do vencimento')
+create_app()
+fe5 = c.get(f'/api/semanas/{S5["id"]}/fechamento').get_json()
+ok([x['id'] for x in fe5['despesas']] == [p2], 'subir o app corrige parcelas antigas',
+   [x['descricao'] for x in fe5['despesas']])
+
 print('== RELATÓRIOS ==')
-fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
-ok(any('(2/3)' in x['descricao'] for x in fe['despesas']), 'parcelas aparecem no fechamento',
-   [x['descricao'] for x in fe['despesas']][:4])
 r = c.get(f'/api/semanas/{S}/relatorio.pdf')
 ok(r.status_code == 200 and r.data[:4] == b'%PDF', 'PDF gera', r.status_code)
 r = c.get(f'/api/semanas/{S}/pagamentos.xlsx')

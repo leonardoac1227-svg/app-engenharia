@@ -15,6 +15,13 @@ porque o material já foi entregue.
 
 As parcelas ficam ligadas por um `grupo_parcela`, o que permite mostrar "2/5"
 na lista e apagar o parcelamento inteiro de uma vez.
+
+Cada parcela pertence à semana do seu vencimento. Quando essa semana ainda
+não foi criada, a parcela fica "agendada": guardada no dia do lançamento,
+mas fora das contas e relatórios daquela semana (ver `sql_fora_da_semana`).
+Ela continua visível em Contas a pagar, que olha o vencimento, e é movida
+para o dia certo quando a semana do vencimento é criada
+(`alocar_parcelas_agendadas`).
 """
 
 from __future__ import annotations
@@ -67,25 +74,51 @@ def dividir_valor(total: float, parcelas: int) -> list[float]:
     return [v / 100 for v in valores]
 
 
-def _dia_para_data(obra_id: int, data_alvo: str) -> int | None:
-    """Dia do diário mais próximo de uma data (a semana pode não existir ainda)."""
-    exato = um(
+def sql_fora_da_semana(despesa: str = "x", dia: str = "d") -> str:
+    """Condição SQL: parcela agendada para depois da semana em que está guardada.
+
+    Vale só da 2ª parcela em diante — a 1ª é a própria nota lançada e fica na
+    semana do lançamento. Os COALESCE evitam que um NULL esconda uma despesa
+    comum. Exige `despesa` ligada a `dia` (tabela `dias`) na consulta.
+    """
+    return (
+        f"(COALESCE({despesa}.grupo_tipo, 'parcela') = 'parcela'"
+        f" AND COALESCE({despesa}.parcela_numero, 0) > 1"
+        f" AND COALESCE({despesa}.vencimento, '') > COALESCE("
+        f"(SELECT MAX(dfim.data) FROM dias dfim WHERE dfim.semana_id = {dia}.semana_id),"
+        f" '9999-12-31'))"
+    )
+
+
+def _dia_do_vencimento(obra_id: int, data_alvo: str) -> int | None:
+    """Dia do diário com essa data, se a semana já existir."""
+    linha = um(
         """SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
             WHERE s.obra_id = ? AND d.data = ?""", (obra_id, data_alvo))
-    if exato:
-        return exato["id"]
+    return linha["id"] if linha else None
 
-    anterior = um(
-        """SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
-            WHERE s.obra_id = ? AND d.data <= ? ORDER BY d.data DESC LIMIT 1""",
-        (obra_id, data_alvo))
-    if anterior:
-        return anterior["id"]
 
-    primeiro = um(
-        """SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
-            WHERE s.obra_id = ? ORDER BY d.data LIMIT 1""", (obra_id,))
-    return primeiro["id"] if primeiro else None
+def alocar_parcelas_agendadas(obra_id: int | None = None) -> int:
+    """Move cada parcela para o dia do seu vencimento, quando ele já existe.
+
+    Chamado ao criar uma semana ou mudar a data de início dela: a parcela que
+    estava agendada passa a contar naquela semana. Sem `obra_id`, vale para
+    todas as obras (usado ao subir o app). Devolve quantas mudaram.
+    """
+    filtro_obra = "s.obra_id = ?" if obra_id is not None else "1 = 1"
+    mudancas = todos(
+        """SELECT x.id, alvo.id AS novo_dia
+             FROM despesas x
+             JOIN dias d ON d.id = x.dia_id
+             JOIN semanas s ON s.id = d.semana_id
+             JOIN semanas s2 ON s2.obra_id = s.obra_id
+             JOIN dias alvo ON alvo.semana_id = s2.id AND alvo.data = x.vencimento
+            WHERE {filtro_obra} AND x.grupo_tipo = 'parcela' AND x.parcela_numero > 1
+              AND alvo.id <> x.dia_id""".format(filtro_obra=filtro_obra),
+        (obra_id,) if obra_id is not None else ())
+    for linha in mudancas:
+        executar("UPDATE despesas SET dia_id = ? WHERE id = ?", (linha["novo_dia"], linha["id"]))
+    return len(mudancas)
 
 
 def validar(dados: dict) -> tuple[int, str, int] | None:
@@ -144,7 +177,8 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, st
 
     for indice in range(1, parcelas):
         vencimento = _proxima_data(inicio, frequencia, indice, intervalo)
-        dia_id = _dia_para_data(obra_id, vencimento.isoformat()) or despesa["dia_id"]
+        # Sem a semana do vencimento, a parcela fica agendada no dia do lançamento.
+        dia_id = _dia_do_vencimento(obra_id, vencimento.isoformat()) or despesa["dia_id"]
 
         cur = executar(
             """INSERT INTO despesas (dia_id, etapa_id, categoria, descricao, fornecedor, valor,
