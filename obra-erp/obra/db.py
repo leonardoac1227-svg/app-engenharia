@@ -430,11 +430,24 @@ CREATE TABLE IF NOT EXISTS despesas (
     pago_em TEXT,
     imagem_path TEXT DEFAULT '',
     nome_arquivo TEXT DEFAULT '',
+    reembolsar_para TEXT DEFAULT '',
     criado_por INTEGER,
     criado_em TEXT NOT NULL,
     FOREIGN KEY (dia_id) REFERENCES dias (id) ON DELETE CASCADE,
     FOREIGN KEY (etapa_id) REFERENCES etapas (id) ON DELETE SET NULL
 );
+
+CREATE TABLE IF NOT EXISTS despesa_anexos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    despesa_id INTEGER NOT NULL,
+    arquivo TEXT NOT NULL,
+    nome_original TEXT DEFAULT '',
+    tamanho INTEGER NOT NULL DEFAULT 0,
+    criado_em TEXT NOT NULL,
+    FOREIGN KEY (despesa_id) REFERENCES despesas (id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_despesa_anexos_despesa ON despesa_anexos (despesa_id);
 
 CREATE TABLE IF NOT EXISTS auditoria (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -613,7 +626,21 @@ COLUNAS_EXTRAS = [
     ("despesas", "grupo_tipo", "TEXT DEFAULT 'parcela'"),
     ("despesas", "parcela_numero", "INTEGER DEFAULT 0"),
     ("despesas", "parcela_total", "INTEGER DEFAULT 0"),
+    ("despesas", "reembolsar_para", "TEXT DEFAULT ''"),
 ]
+
+# Até a v3.2 cada lançamento tinha um único anexo, guardado direto em
+# despesas.imagem_path. Agora os anexos moram em despesa_anexos (vários por
+# lançamento) e imagem_path segue espelhando o primeiro, para relatórios e
+# telas antigas. Esta cópia roda a cada boot e é idempotente: só entra quem
+# tem arquivo e ainda não tem nenhuma linha na tabela nova.
+COPIAR_ANEXOS_ANTIGOS = """
+INSERT INTO despesa_anexos (despesa_id, arquivo, nome_original, tamanho, criado_em)
+SELECT x.id, x.imagem_path, COALESCE(x.nome_arquivo, ''), 0, x.criado_em
+  FROM despesas x
+ WHERE x.imagem_path IS NOT NULL AND x.imagem_path != ''
+   AND NOT EXISTS (SELECT 1 FROM despesa_anexos a WHERE a.despesa_id = x.id)
+"""
 
 
 def _colunas(cur, tabela: str) -> set[str]:
@@ -666,6 +693,14 @@ def _migrar_postgres() -> None:
         if faltando:
             log.warning("Colunas que não puderam ser criadas no Postgres:\n%s",
                         "\n".join(faltando))
+
+        try:
+            with conexao.cursor() as cur:
+                cur.execute(COPIAR_ANEXOS_ANTIGOS)
+            conexao.commit()
+        except Exception as erro:  # noqa: BLE001
+            conexao.rollback()
+            log.warning("Não foi possível copiar os anexos antigos: %s", erro)
 
         # RLS é best-effort: em alguns papéis do Postgres o ALTER TABLE pode
         # não ser permitido, e isso não deve impedir o app de subir.
@@ -721,6 +756,8 @@ def _migrar_sqlite() -> None:
     versao_atual = cur.execute("PRAGMA user_version").fetchone()[0]
 
     _backfill(conn, cur)
+    cur.execute(COPIAR_ANEXOS_ANTIGOS)
+    conn.commit()
     if versao_atual < 4:
         _reparar_semanas_colapsadas(conn, cur)
     if versao_atual < 5:

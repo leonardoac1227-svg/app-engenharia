@@ -30,6 +30,7 @@ import uuid
 from datetime import date, timedelta
 
 from ..db import executar, todos, um
+from .anexos_despesa import registrar as registrar_anexo
 from ..utils import ApiErro, agora_iso, data_iso, numero, texto
 
 FREQUENCIAS = {
@@ -164,6 +165,9 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, st
     primeiro_vencimento = despesa["vencimento"] or data_iso(None, None) or agora_iso()[:10]
     inicio = date.fromisoformat(str(primeiro_vencimento)[:10])
     descricao_base = despesa["descricao"] or ""
+    # Todas as parcelas apontam para os mesmos arquivos da nota.
+    anexos = todos("SELECT arquivo, nome_original, tamanho FROM despesa_anexos "
+                   "WHERE despesa_id = ? ORDER BY id", (despesa_id,))
 
     executar(
         """UPDATE despesas SET valor = ?, descricao = ?, vencimento = ?,
@@ -191,6 +195,9 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, st
              valores[indice], despesa["numero_nota"], grupo, indice + 1, parcelas,
              vencimento.isoformat(), despesa["imagem_path"], despesa["nome_arquivo"],
              usuario_id, agora_iso()))
+
+        for anexo in anexos:
+            registrar_anexo(cur.lastrowid, anexo["arquivo"], anexo["nome_original"], anexo["tamanho"])
 
         criadas.append({"id": cur.lastrowid, "numero": indice + 1,
                         "valor": valores[indice], "vencimento": vencimento.isoformat()})

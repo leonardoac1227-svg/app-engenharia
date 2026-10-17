@@ -36,7 +36,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 # Ordem importa: uma tabela só entra depois daquelas de quem ela depende.
 ORDEM = [
     "usuarios", "obras", "usuario_obras", "etapas", "semanas", "funcionarios",
-    "dias", "fotos", "horas", "medicoes", "despesas", "auditoria",
+    "dias", "fotos", "horas", "medicoes", "despesas", "despesa_anexos", "auditoria",
     "metas", "meta_progresso", "contratos", "contrato_medicoes",
     "locacoes", "locacao_parcelas",
 ]

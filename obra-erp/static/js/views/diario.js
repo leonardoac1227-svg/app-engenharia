@@ -10,9 +10,10 @@ import {
   abrirLightbox, badgeStatus, confirmar, dataBR, esc, moeda, num, toast, tratarFotosQuebradas, vazio,
 } from '../util.js';
 import { htmlBarraSemana, htmlDiasStrip, ligarBarraSemana } from './comum.js';
-import { abrirModalDespesa } from './financeiro.js';
+import { abrirModalDespesa, htmlAnexos, ligarLinksAnexo, textoReembolso } from './financeiro.js';
 
 let cacheDia = { horas: {}, despesas: [] };
+const secoesAbertas = {};
 
 function diaSelecionado() {
   if (!estado.dias.length) return null;
@@ -50,6 +51,10 @@ export async function renderizar(raiz) {
 
   const somenteLeitura = !podeLancar();
 
+  // Redesenhar depois de salvar não pode fechar a seção em que a pessoa estava.
+  raiz.querySelectorAll('details[data-secao]').forEach((d) => { secoesAbertas[d.dataset.secao] = d.open; });
+  const aberta = (secao, padrao = false) => ((secoesAbertas[secao] ?? padrao) ? ' open' : '');
+
   raiz.innerHTML = `
     <div class="section-head">
       <div><span class="eyebrow">DIÁRIO DA OBRA</span><h2>${esc(dia.dia_semana)}, ${dataBR(dia.data)}</h2></div>
@@ -68,7 +73,7 @@ export async function renderizar(raiz) {
     </div>
 
     <!-- ===================== FOTOS ===================== -->
-    <details class="accordion" open>
+    <details class="accordion" data-secao="fotos"${aberta('fotos', true)}>
       <summary>
         <span class="acc-code">FOT-01</span>
         <span class="acc-title">Fotos do andamento</span>
@@ -102,7 +107,7 @@ export async function renderizar(raiz) {
     </details>
 
     <!-- ===================== PONTO ===================== -->
-    <details class="accordion">
+    <details class="accordion" data-secao="ponto"${aberta('ponto')}>
       <summary>
         <span class="acc-code">PON-02</span>
         <span class="acc-title">Ponto da equipe</span>
@@ -147,7 +152,7 @@ export async function renderizar(raiz) {
 
     <!-- ===================== CAIXA DO DIA ===================== -->
     ${podeFinanceiro() ? `
-    <details class="accordion">
+    <details class="accordion" data-secao="caixa"${aberta('caixa')}>
       <summary>
         <span class="acc-code">FIN-03</span>
         <span class="acc-title">Caixa do dia</span>
@@ -160,10 +165,14 @@ export async function renderizar(raiz) {
             <div class="item ${x.vencida ? 'alerta-vencida' : ''}">
               <div class="item-corpo">
                 <div class="item-titulo">${esc(x.descricao)}${badgeStatus(x.status_pagamento, x.vencida)}</div>
-                <div class="item-sub">${esc(x.categoria)}${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}${x.nome_arquivo ? ' · 📎 ' + esc(x.nome_arquivo) : ''}</div>
+                <div class="item-sub">${esc(x.categoria)}${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}${textoReembolso(x)}</div>
+                ${htmlAnexos(x)}
               </div>
               <div class="item-valor">${moeda(x.valor)}</div>
-              <div class="item-acoes"><button class="icon-mini" data-remover-despesa="${x.id}">🗑</button></div>
+              <div class="item-acoes">
+                <button class="icon-mini" data-editar-despesa="${x.id}" title="Editar">✎</button>
+                <button class="icon-mini" data-remover-despesa="${x.id}" title="Excluir">🗑</button>
+              </div>
             </div>`).join('') : '<p class="vazio-inline">Nenhum lançamento neste dia.</p>'}
         </div>
         <button class="btn btn-brass" data-acao="nova-despesa">+ Lançar despesa</button>
@@ -309,9 +318,16 @@ function ligarEventos(raiz, dia) {
       await recarregarSemana({ manterDia: true });
     });
   }
+  raiz.querySelectorAll('[data-editar-despesa]').forEach((btn) => {
+    btn.onclick = () => {
+      const despesa = cacheDia.despesas.find((x) => String(x.id) === btn.dataset.editarDespesa);
+      abrirModalDespesa(dia, async () => { await recarregarSemana({ manterDia: true }); }, despesa);
+    };
+  });
+  ligarLinksAnexo(raiz);
   raiz.querySelectorAll('[data-remover-despesa]').forEach((btn) => {
     btn.onclick = async () => {
-      const ok = await confirmar({ titulo: 'Excluir este lançamento?', perigo: true, confirmar: 'Excluir' });
+      const ok = await confirmar({ titulo: 'Excluir este lançamento?', texto: 'Os anexos também serão apagados.', perigo: true, confirmar: 'Excluir' });
       if (!ok) return;
       await api.del(`/api/despesas/${btn.dataset.removerDespesa}`);
       toast('Lançamento removido.');

@@ -9,17 +9,18 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
-from ..config import CATEGORIAS_PADRAO, STATUS_PAGAMENTO
+from ..config import CATEGORIAS_PADRAO, REEMBOLSO_PADRAO, STATUS_PAGAMENTO
 from ..db import executar, registrar_auditoria, todos, um
 from ..security import (exigir_financeiro, garantir_acesso_obra, login_obrigatorio,
                         obra_da_despesa, obra_do_dia)
+from ..services import anexos_despesa
 from ..services.locacoes import criar_locacao
 from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
 from ..services.fretes import validar as validar_frete
 from ..services.parcelamento import gerar_parcelas, listar_grupo, remover_grupo, sql_fora_da_semana
 from ..services.parcelamento import validar as validar_parcelamento
 from ..utils import (ApiErro, agora_iso, data_br, data_iso, formatar_bytes, hoje_iso, moeda,
-                     numero, remover_anexo, salvar_anexo, somar_dias, texto)
+                     numero, somar_dias, texto)
 
 bp = Blueprint("financeiro", __name__, url_prefix="/api")
 
@@ -97,6 +98,13 @@ def _barrar_nota_duplicada(obra_id, numero_nota, fornecedor, confirmado, ignorar
         409, "nota_duplicada")
 
 
+def _quem_recebe_reembolso(status: str, nome) -> str:
+    """Nome de quem adiantou o dinheiro. Só existe em lançamento de reembolso."""
+    if status != "Reembolso":
+        return ""
+    return texto(nome, 80) or REEMBOLSO_PADRAO
+
+
 @bp.get("/dias/<int:dia_id>/despesas")
 def listar(dia_id: int):
     exigir_financeiro()
@@ -104,10 +112,11 @@ def listar(dia_id: int):
     rows = todos(
         f"""SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
                   x.numero_nota, x.grupo_parcela, x.grupo_tipo, x.parcela_numero, x.parcela_total,
-                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo
+                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo, x.reembolsar_para,
+                  x.dia_id
              FROM despesas x JOIN dias d ON d.id = x.dia_id
             WHERE x.dia_id = ? AND NOT {sql_fora_da_semana()} ORDER BY x.id DESC""", (dia_id,))
-    return jsonify([_serializar(r) for r in rows])
+    return jsonify(anexos_despesa.anexar_lista([_serializar(r) for r in rows]))
 
 
 @bp.post("/dias/<int:dia_id>/despesas")
@@ -124,24 +133,31 @@ def criar(dia_id: int):
 
     vencimento = data_iso(request.form.get("vencimento"), None, "vencimento")
     pago_em = hoje_iso() if status == "Pago" else None
+    reembolsar_para = _quem_recebe_reembolso(status, request.form.get("reembolsar_para"))
 
     fornecedor = texto(request.form.get("fornecedor"), 120)
     numero_nota = texto(request.form.get("numero_nota"), 40)
     _barrar_nota_duplicada(obra_id, numero_nota, fornecedor,
                            request.form.get("confirmar_duplicidade") in ("1", "true", "True"))
 
-    meta = salvar_anexo(request.files.get("imagem") or request.files.get("anexo"))
+    # Vários arquivos vêm em "anexos"; "imagem"/"anexo" é o envio de um só,
+    # das versões anteriores do app (ainda abertas em algum celular).
+    uploads = [*request.files.getlist("anexos"),
+               request.files.get("imagem") or request.files.get("anexo")]
+    uploads = [u for u in uploads if u and u.filename]
+    if len(uploads) > anexos_despesa.LIMITE_POR_LANCAMENTO:
+        raise ApiErro(f"Cada lançamento aceita até {anexos_despesa.LIMITE_POR_LANCAMENTO} anexos.")
 
     cur = executar(
         """INSERT INTO despesas (dia_id, categoria, descricao, fornecedor, valor,
                                  status_pagamento, numero_nota, vencimento, pago_em, imagem_path,
-                                 nome_arquivo, criado_por, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                                 nome_arquivo, reembolsar_para, criado_por, criado_em)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', ?, ?, ?)""",
         (dia_id, categoria, descricao,
-         fornecedor, valor, status, numero_nota, vencimento, pago_em,
-         meta["arquivo"] if meta else "", meta["nome_original"] if meta else "",
+         fornecedor, valor, status, numero_nota, vencimento, pago_em, reembolsar_para,
          usuario["id"], agora_iso()),
     )
+    gravados = anexos_despesa.adicionar(cur.lastrowid, uploads)
     registrar_auditoria(usuario, "lancou_despesa", "despesa", cur.lastrowid,
                         f"{descricao} · {valor:.2f} · {status}")
     frete = validar_frete(request.form) if categoria == "Frete" else None
@@ -162,8 +178,10 @@ def criar(dia_id: int):
         resposta["frete"] = resposta_frete
     if parcelamento:
         resposta["parcelamento"] = resposta_parcelas
-    if meta:
-        resposta["compressao"] = _relatorio_compressao(meta["tamanho_original"], meta["tamanho"])
+    if gravados:
+        resposta["compressao"] = _relatorio_compressao(
+            sum(m["tamanho_original"] for m in gravados), sum(m["tamanho"] for m in gravados))
+        resposta["anexos"] = len(gravados)
 
     # Locação com recorrência: a despesa recém-lançada é a 1ª parcela, e o
     # cronograma das renovações seguintes nasce junto.
@@ -186,10 +204,16 @@ def criar(dia_id: int):
 @bp.put("/despesas/<int:despesa_id>")
 def atualizar(despesa_id: int):
     usuario = exigir_financeiro()
-    obra_da_despesa(despesa_id)
+    obra_id = obra_da_despesa(despesa_id)
     dados = request.get_json(silent=True) or {}
 
     campos, valores = [], []
+    if "dia_id" in dados:
+        # Lançou no dia errado: só pode ir para outro dia da mesma obra.
+        novo_dia = int(numero(dados["dia_id"], 0, 1, campo="o dia"))
+        if obra_do_dia(novo_dia) != obra_id:
+            raise ApiErro("O dia escolhido é de outra obra.")
+        campos.append("dia_id = ?"); valores.append(novo_dia)
     if "categoria" in dados:
         campos.append("categoria = ?"); valores.append(texto(dados["categoria"], 40) or "Material")
     if "descricao" in dados:
@@ -207,6 +231,13 @@ def atualizar(despesa_id: int):
         campos.append("status_pagamento = ?"); valores.append(status)
         campos.append("pago_em = ?")
         valores.append(data_iso(dados.get("pago_em"), hoje_iso()) if status == "Pago" else None)
+        campos.append("reembolsar_para = ?")
+        valores.append(_quem_recebe_reembolso(status, dados.get("reembolsar_para")))
+    elif "reembolsar_para" in dados:
+        atual = um("SELECT status_pagamento FROM despesas WHERE id = ?", (despesa_id,))
+        campos.append("reembolsar_para = ?")
+        valores.append(_quem_recebe_reembolso(atual["status_pagamento"] if atual else "",
+                                              dados.get("reembolsar_para")))
 
     if "numero_nota" in dados:
         numero_nota = texto(dados["numero_nota"], 40)
@@ -223,6 +254,33 @@ def atualizar(despesa_id: int):
     valores.append(despesa_id)
     executar(f"UPDATE despesas SET {', '.join(campos)} WHERE id = ?", valores)
     registrar_auditoria(usuario, "editou_despesa", "despesa", despesa_id)
+    return jsonify({"ok": True})
+
+
+@bp.post("/despesas/<int:despesa_id>/anexos")
+def adicionar_anexos(despesa_id: int):
+    """Acrescenta arquivos a um lançamento que já existe."""
+    usuario = exigir_financeiro()
+    obra_da_despesa(despesa_id)
+    uploads = request.files.getlist("anexos") or [request.files.get("anexo")]
+    gravados = anexos_despesa.adicionar(despesa_id, uploads)
+    if not gravados:
+        raise ApiErro("Nenhum arquivo recebido.")
+    registrar_auditoria(usuario, "anexou_despesa", "despesa", despesa_id,
+                        ", ".join(m["nome_original"] for m in gravados))
+    return jsonify({
+        "anexos": anexos_despesa.anexos_por_despesa([despesa_id]).get(despesa_id, []),
+        "compressao": _relatorio_compressao(sum(m["tamanho_original"] for m in gravados),
+                                            sum(m["tamanho"] for m in gravados)),
+    }), 201
+
+
+@bp.delete("/despesas/<int:despesa_id>/anexos/<int:anexo_id>")
+def remover_anexo_da_despesa(despesa_id: int, anexo_id: int):
+    usuario = exigir_financeiro()
+    obra_da_despesa(despesa_id)
+    anexos_despesa.remover(despesa_id, anexo_id)
+    registrar_auditoria(usuario, "removeu_anexo", "despesa", despesa_id, str(anexo_id))
     return jsonify({"ok": True})
 
 
@@ -243,10 +301,12 @@ def pagar(despesa_id: int):
 def remover(despesa_id: int):
     usuario = exigir_financeiro()
     obra_da_despesa(despesa_id)
-    row = um("SELECT imagem_path, descricao FROM despesas WHERE id = ?", (despesa_id,))
+    row = um("SELECT descricao FROM despesas WHERE id = ?", (despesa_id,))
+    arquivos = anexos_despesa.arquivos_da_despesa(despesa_id)
+    executar("DELETE FROM despesa_anexos WHERE despesa_id = ?", (despesa_id,))
     executar("DELETE FROM despesas WHERE id = ?", (despesa_id,))
-    if row and row["imagem_path"]:
-        remover_anexo(row["imagem_path"])
+    # Parcelas da mesma nota dividem o arquivo: só some quando ninguém mais usa.
+    anexos_despesa.apagar_arquivos_orfaos(arquivos)
     registrar_auditoria(usuario, "excluiu_despesa", "despesa", despesa_id,
                         row["descricao"] if row else "")
     return jsonify({"ok": True})
@@ -263,12 +323,14 @@ def painel_financeiro(obra_id: int):
 
     abertas = [_serializar(r) for r in todos(
         """SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
-                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo, d.data, s.numero AS semana
+                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo, x.reembolsar_para,
+                  d.data, s.numero AS semana
              FROM despesas x
              JOIN dias d ON d.id = x.dia_id
              JOIN semanas s ON s.id = d.semana_id
             WHERE s.obra_id = ? AND x.status_pagamento = 'Em Aberto'
             ORDER BY (x.vencimento IS NULL), x.vencimento, x.id""", (obra_id,))]
+    anexos_despesa.anexar_lista(abertas)
 
     vencidas = [x for x in abertas if x["vencida"]]
     proximas = [x for x in abertas if x["vencimento"] and hoje <= x["vencimento"] <= limite]

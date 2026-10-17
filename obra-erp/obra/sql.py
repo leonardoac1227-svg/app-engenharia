@@ -202,9 +202,21 @@ CREATE TABLE IF NOT EXISTS despesas (
     pago_em TEXT,
     imagem_path TEXT DEFAULT '',
     nome_arquivo TEXT DEFAULT '',
+    reembolsar_para TEXT DEFAULT '',
     criado_por BIGINT,
     criado_em TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS despesa_anexos (
+    id BIGSERIAL PRIMARY KEY,
+    despesa_id BIGINT NOT NULL REFERENCES despesas (id) ON DELETE CASCADE,
+    arquivo TEXT NOT NULL,
+    nome_original TEXT DEFAULT '',
+    tamanho BIGINT NOT NULL DEFAULT 0,
+    criado_em TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_despesa_anexos_despesa ON despesa_anexos (despesa_id);
 
 CREATE TABLE IF NOT EXISTS auditoria (
     id BIGSERIAL PRIMARY KEY,
@@ -343,6 +355,7 @@ ALTER TABLE fotos         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE horas         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE medicoes      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE despesas      ENABLE ROW LEVEL SECURITY;
+ALTER TABLE despesa_anexos ENABLE ROW LEVEL SECURITY;
 ALTER TABLE auditoria     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE metas          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE meta_progresso ENABLE ROW LEVEL SECURITY;
@@ -362,8 +375,8 @@ SELECT setval(pg_get_serial_sequence(t, 'id'),
 
 TABELAS_COM_ID = [
     "usuarios", "obras", "etapas", "semanas", "funcionarios", "dias",
-    "fotos", "horas", "medicoes", "despesas", "auditoria", "metas", "meta_progresso",
-    "contratos", "contrato_medicoes", "locacoes", "locacao_parcelas",
+    "fotos", "horas", "medicoes", "despesas", "despesa_anexos", "auditoria", "metas",
+    "meta_progresso", "contratos", "contrato_medicoes", "locacoes", "locacao_parcelas",
 ]
 
 

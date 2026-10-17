@@ -14,6 +14,7 @@ from datetime import date
 from ..config import DIAS_SEMANA, DIAS_UTEIS
 from ..db import get_db, todos, um
 from ..utils import ApiErro, agora_iso, data_br, hoje_iso, somar_dias
+from .anexos_despesa import anexar_lista
 from .fretes import resumo_semana as resumo_fretes
 from .locacoes import alertas as alertas_locacoes
 from .parcelamento import sql_fora_da_semana
@@ -198,7 +199,8 @@ def dados_fechamento(semana_id: int) -> dict:
         for r in todos(
             f"""SELECT x.id, x.dia_id, x.categoria, x.descricao, x.fornecedor, x.valor,
                        x.status_pagamento, x.numero_nota, x.vencimento, x.pago_em, x.imagem_path,
-                       x.nome_arquivo
+                       x.nome_arquivo, x.reembolsar_para, x.grupo_tipo, x.parcela_numero,
+                       x.parcela_total
                   FROM despesas x JOIN dias d ON d.id = x.dia_id
                  WHERE x.dia_id IN ({marcas}) AND NOT {sql_fora_da_semana()}
                  ORDER BY x.dia_id, x.id""", ids):
@@ -207,6 +209,7 @@ def dados_fechamento(semana_id: int) -> dict:
             item["data"] = data_por_id.get(r["dia_id"], "")
             item["anexo_url"] = f"/arquivos/{r['imagem_path']}" if r["imagem_path"] else ""
             despesas.append(item)
+        anexar_lista(despesas)
 
     por_categoria = {}
     for d in despesas:
