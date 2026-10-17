@@ -36,12 +36,14 @@ def _limpo(texto: str, tamanho: int = 42) -> str:
 
 def listar_arquivos(semana_id: int) -> dict:
     """Índice de tudo que foi anexado na semana."""
+    # Um item por arquivo: lançamento com nota + comprovante aparece duas vezes.
     notas = [{
-        "id": linha["id"],
+        "id": linha["anexo_id"],
+        "despesa_id": linha["id"],
         "tipo": "nota",
-        "url": f"/arquivos/{linha['imagem_path']}",
-        "arquivo": linha["imagem_path"],
-        "nome_original": linha["nome_arquivo"] or linha["imagem_path"],
+        "url": f"/arquivos/{linha['arquivo']}",
+        "arquivo": linha["arquivo"],
+        "nome_original": linha["nome_original"] or linha["arquivo"],
         "titulo": linha["descricao"] or "Lançamento",
         "subtitulo": " · ".join(filter(None, [
             linha["fornecedor"] or "",
@@ -53,14 +55,16 @@ def listar_arquivos(semana_id: int) -> dict:
         "valor": round(float(linha["valor"] or 0), 2),
         "status_pagamento": linha["status_pagamento"],
         "numero_nota": linha["numero_nota"] or "",
-        "eh_pdf": str(linha["imagem_path"]).lower().endswith(".pdf"),
+        "eh_pdf": str(linha["arquivo"]).lower().endswith(".pdf"),
     } for linha in todos(
-        f"""SELECT x.id, x.descricao, x.fornecedor, x.categoria, x.valor, x.numero_nota,
-                  x.status_pagamento, x.imagem_path, x.nome_arquivo, d.data, d.dia_semana
-             FROM despesas x JOIN dias d ON d.id = x.dia_id
-            WHERE d.semana_id = ? AND x.imagem_path IS NOT NULL AND x.imagem_path != ''
-              AND NOT {sql_fora_da_semana()}
-            ORDER BY d.data, x.id""", (semana_id,))]
+        f"""SELECT x.id, a.id AS anexo_id, x.descricao, x.fornecedor, x.categoria, x.valor,
+                  x.numero_nota, x.status_pagamento, a.arquivo, a.nome_original,
+                  d.data, d.dia_semana
+             FROM despesa_anexos a
+             JOIN despesas x ON x.id = a.despesa_id
+             JOIN dias d ON d.id = x.dia_id
+            WHERE d.semana_id = ? AND NOT {sql_fora_da_semana()}
+            ORDER BY d.data, x.id, a.id""", (semana_id,))]
 
     fotos = [{
         "id": linha["id"],
@@ -86,7 +90,8 @@ def listar_arquivos(semana_id: int) -> dict:
         "total": len(notas) + len(fotos),
         "notas": len(notas),
         "fotos": len(fotos),
-        "valor_com_nota": round(sum(n["valor"] for n in notas), 2),
+        # Soma cada lançamento uma vez, mesmo que ele tenha vários arquivos.
+        "valor_com_nota": round(sum({n["despesa_id"]: n["valor"] for n in notas}.values()), 2),
     }
 
 

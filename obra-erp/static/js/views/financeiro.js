@@ -15,6 +15,32 @@ import { htmlBarraSemana, ligarBarraSemana } from './comum.js';
 
 const CATEGORIAS = ['Material', 'Serviço', 'Locação', 'Frete', 'Alimentação', 'Outro'];
 const STATUS = ['Reembolso', 'Em Aberto', 'Pago'];
+const LIMITE_ANEXOS = 5;   // mesmo limite do servidor
+
+/** Links dos anexos de um lançamento, um por arquivo. */
+export function htmlAnexos(x) {
+  const anexos = x.anexos?.length ? x.anexos
+    : (x.anexo_url ? [{ url: x.anexo_url, nome: x.nome_arquivo || 'ver anexo' }] : []);
+  if (!anexos.length) return '';
+  return `<div class="item-sub anexos-links">${anexos.map((a) => `
+    <a href="#" data-anexo="${esc(a.url)}" data-nome="${esc(a.nome)}">📎 ${esc(a.nome)}</a>`).join('')}</div>`;
+}
+
+/** Texto curto "reembolso p/ Fulano" para a linha do lançamento. */
+export const textoReembolso = (x) => (
+  x.status_pagamento === 'Reembolso' && x.reembolsar_para ? ` · reembolso p/ ${esc(x.reembolsar_para)}` : '');
+
+/** Foto abre no visualizador; PDF abre em outra aba. */
+export function ligarLinksAnexo(raiz) {
+  raiz.querySelectorAll('[data-anexo]').forEach((link) => {
+    link.onclick = (e) => {
+      e.preventDefault();
+      const url = link.dataset.anexo;
+      if (/\.pdf$/i.test(link.dataset.nome) || /\.pdf$/i.test(url)) { window.open(url, '_blank', 'noopener'); return; }
+      abrirLightbox(url, link.dataset.nome);
+    };
+  });
+}
 
 let filtroStatus = 'todos';
 
@@ -22,14 +48,17 @@ let filtroStatus = 'todos';
 export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
   const edicao = !!despesa;
   const statusInicial = despesa?.status_pagamento || 'Em Aberto';
+  const diaInicial = edicao ? despesa.dia_id : dia?.id;
+  // Parcela agendada em outra semana não aparece na lista de dias: aí o dia fica como está.
+  const podeTrocarDia = !edicao || estado.dias.some((d) => d.id === diaInicial);
 
   const opcoesDia = estado.dias.map((d) => `
-    <option value="${d.id}"${d.id === dia?.id ? ' selected' : ''}>${esc(d.dia_semana)} · ${dataBR(d.data)}</option>`).join('');
+    <option value="${d.id}"${d.id === diaInicial ? ' selected' : ''}>${esc(d.dia_semana)} · ${dataBR(d.data)}</option>`).join('');
 
   abrirModal(`
     <h3>${edicao ? 'Editar lançamento' : 'Lançar despesa'}</h3>
 
-    ${edicao ? '' : `<label class="field-label">Dia do lançamento</label><select id="dspDia">${opcoesDia}</select>`}
+    ${podeTrocarDia ? `<label class="field-label">Dia do lançamento</label><select id="dspDia">${opcoesDia}</select>` : ''}
 
     <label class="field-label">Categoria</label>
     <select id="dspCategoria">
@@ -142,15 +171,21 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
       <input type="date" id="dspVencimento" value="${esc(despesa?.vencimento || '')}">
     </div>
 
-    ${edicao ? '' : `
-      <label class="field-label">Nota fiscal / comprovante</label>
-      <div class="btn-linha" style="margin-top:0">
-        <button type="button" class="btn btn-outline btn-small" id="dspBtnCamera" style="flex:1">📷 Câmera</button>
-        <button type="button" class="btn btn-outline btn-small" id="dspBtnArquivo" style="flex:1">📎 Galeria / arquivo</button>
-      </div>
-      <input type="file" id="dspAnexoCamera" accept="image/*" capture="environment" class="hidden">
-      <input type="file" id="dspAnexo" accept="image/*,application/pdf,.pdf" class="hidden">
-      <div id="dspAnexoInfo" class="anexo-info hidden"></div>`}
+    <div id="dspReembolsoBox" class="${statusInicial === 'Reembolso' ? '' : 'hidden'}">
+      <label class="field-label" for="dspReembolsarPara">Reembolsar para</label>
+      <input type="text" id="dspReembolsarPara" maxlength="80" autocomplete="off"
+             value="${esc(despesa?.reembolsar_para || estado.reembolsoPadrao)}"
+             placeholder="Quem adiantou o dinheiro">
+    </div>
+
+    <label class="field-label">Notas fiscais / comprovantes <span class="faint" id="dspAnexoContagem"></span></label>
+    <div id="dspAnexoLista" class="stack" style="gap:6px"></div>
+    <div class="btn-linha" style="margin-top:8px">
+      <button type="button" class="btn btn-outline btn-small" id="dspBtnCamera" style="flex:1">📷 Câmera</button>
+      <button type="button" class="btn btn-outline btn-small" id="dspBtnArquivo" style="flex:1">📎 Galeria / arquivo</button>
+    </div>
+    <input type="file" id="dspAnexoCamera" accept="image/*" capture="environment" class="hidden">
+    <input type="file" id="dspAnexo" accept="image/*,application/pdf,.pdf" multiple class="hidden">
 
     <div class="btn-linha">
       <button class="btn btn-outline" id="dspCancelar">Cancelar</button>
@@ -163,6 +198,7 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
         status = btn.dataset.status;
         raiz.querySelectorAll('#dspStatus button').forEach((b) => b.classList.toggle('ativo', b === btn));
         raiz.querySelector('#dspVencimentoBox').classList.toggle('hidden', status !== 'Em Aberto');
+        raiz.querySelector('#dspReembolsoBox').classList.toggle('hidden', status !== 'Reembolso');
       };
     });
 
@@ -276,46 +312,77 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
       alternarLocacao();
     }
 
-    // ---- anexo: galeria, arquivos ou câmera, sempre comprimido no aparelho
-    let anexoEscolhido = null;
+    // ---- anexos: galeria, arquivos ou câmera, sempre comprimidos no aparelho.
+    // Na edição, os que já existem só saem de fato ao salvar.
+    const existentes = [...(despesa?.anexos || [])];
+    const removidos = new Set();
+    const novos = [];
+    let preparando = 0;
     const campoAnexo = raiz.querySelector('#dspAnexo');
     const campoCamera = raiz.querySelector('#dspAnexoCamera');
-    const info = raiz.querySelector('#dspAnexoInfo');
+    const listaAnexos = raiz.querySelector('#dspAnexoLista');
 
-    const receberAnexo = async (arquivo) => {
-      if (!arquivo) return;
-      const tamanhoOriginal = arquivo.size;
-      info.classList.remove('hidden');
-      info.innerHTML = '<span class="muted">preparando arquivo...</span>';
+    const totalAnexos = () => existentes.filter((a) => !removidos.has(a.id)).length + novos.length;
 
-      // PDF não dá para comprimir no navegador: vai inteiro e o servidor
-      // reamostra as imagens embutidas antes de gravar.
-      const ehPdf = /pdf$/i.test(arquivo.type) || /\.pdf$/i.test(arquivo.name || '');
-      anexoEscolhido = ehPdf ? arquivo : await comprimirImagem(arquivo);
+    const desenharAnexos = () => {
+      const mantidos = existentes.filter((a) => !removidos.has(a.id));
+      listaAnexos.innerHTML = [
+        ...mantidos.map((a) => `
+          <div class="anexo-info" style="margin-top:0">
+            <span class="anexo-nome">📎 ${esc(a.nome)}</span>
+            <button type="button" class="icon-mini" data-tirar-existente="${a.id}" title="Remover anexo">✕</button>
+          </div>`),
+        ...novos.map((n, i) => `
+          <div class="anexo-info" style="margin-top:0">
+            <span class="anexo-nome">📎 ${esc(n.arquivo.name)}</span>
+            <span class="anexo-tamanho">${n.reduziu
+              ? `${formatarBytes(n.original)} → <b>${formatarBytes(n.arquivo.size)}</b>`
+              : formatarBytes(n.arquivo.size)}${n.ehPdf ? ' · o servidor ainda comprime o PDF' : ''}</span>
+            <button type="button" class="icon-mini" data-tirar-novo="${i}" title="Remover anexo">✕</button>
+          </div>`),
+        preparando ? '<div class="anexo-info" style="margin-top:0"><span class="muted">preparando arquivo...</span></div>' : '',
+      ].join('');
 
-      const reduziu = tamanhoOriginal - anexoEscolhido.size > 50 * 1024;
-      info.innerHTML = `
-        <span class="anexo-nome">📎 ${esc(anexoEscolhido.name)}</span>
-        <span class="anexo-tamanho">${reduziu
-          ? `${formatarBytes(tamanhoOriginal)} → <b>${formatarBytes(anexoEscolhido.size)}</b>`
-          : formatarBytes(anexoEscolhido.size)}${ehPdf ? ' · o servidor ainda comprime o PDF' : ''}</span>
-        <button type="button" class="icon-mini" id="dspAnexoLimpar" title="Remover anexo">✕</button>`;
+      const total = totalAnexos();
+      raiz.querySelector('#dspAnexoContagem').textContent = total ? `(${total} de ${LIMITE_ANEXOS})` : `(até ${LIMITE_ANEXOS})`;
+      const cheio = total + preparando >= LIMITE_ANEXOS;
+      raiz.querySelector('#dspBtnCamera').disabled = cheio;
+      raiz.querySelector('#dspBtnArquivo').disabled = cheio;
 
-      info.querySelector('#dspAnexoLimpar').onclick = () => {
-        anexoEscolhido = null;
-        campoAnexo.value = '';
-        campoCamera.value = '';
-        info.classList.add('hidden');
-        info.innerHTML = '';
-      };
+      listaAnexos.querySelectorAll('[data-tirar-existente]').forEach((btn) => {
+        btn.onclick = () => { removidos.add(Number(btn.dataset.tirarExistente)); desenharAnexos(); };
+      });
+      listaAnexos.querySelectorAll('[data-tirar-novo]').forEach((btn) => {
+        btn.onclick = () => { novos.splice(Number(btn.dataset.tirarNovo), 1); desenharAnexos(); };
+      });
     };
 
-    if (campoAnexo) {
-      raiz.querySelector('#dspBtnArquivo').onclick = () => campoAnexo.click();
-      raiz.querySelector('#dspBtnCamera').onclick = () => campoCamera.click();
-      campoAnexo.onchange = () => receberAnexo(campoAnexo.files[0]);
-      campoCamera.onchange = () => receberAnexo(campoCamera.files[0]);
-    }
+    const receberAnexos = async (lista) => {
+      const vagas = LIMITE_ANEXOS - totalAnexos() - preparando;
+      const arquivos = Array.from(lista || []);
+      if (arquivos.length > vagas) toast(`Cada lançamento aceita até ${LIMITE_ANEXOS} anexos.`, 'erro');
+      const aceitos = arquivos.slice(0, Math.max(vagas, 0));
+      preparando += aceitos.length;
+      desenharAnexos();
+      for (const arquivo of aceitos) {
+        // PDF não dá para comprimir no navegador: vai inteiro e o servidor
+        // reamostra as imagens embutidas antes de gravar.
+        const ehPdf = /pdf$/i.test(arquivo.type) || /\.pdf$/i.test(arquivo.name || '');
+        const pronto = ehPdf ? arquivo : await comprimirImagem(arquivo);
+        novos.push({ arquivo: pronto, original: arquivo.size, ehPdf,
+          reduziu: arquivo.size - pronto.size > 50 * 1024 });
+        preparando -= 1;
+        desenharAnexos();
+      }
+      campoAnexo.value = '';
+      campoCamera.value = '';
+    };
+
+    raiz.querySelector('#dspBtnArquivo').onclick = () => campoAnexo.click();
+    raiz.querySelector('#dspBtnCamera').onclick = () => campoCamera.click();
+    campoAnexo.onchange = () => receberAnexos(campoAnexo.files);
+    campoCamera.onchange = () => receberAnexos(campoCamera.files);
+    desenharAnexos();
 
     raiz.querySelector('#dspCancelar').onclick = fecharModal;
 
@@ -325,15 +392,24 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
       if (!descricao) { toast('Informe a descrição.', 'erro'); return; }
       if (!valor || valor <= 0) { toast('Informe um valor válido.', 'erro'); return; }
 
+      if (preparando) { toast('Aguarde o anexo terminar de carregar.', 'erro'); return; }
+      const reembolsarPara = raiz.querySelector('#dspReembolsarPara').value.trim();
+      if (status === 'Reembolso' && !reembolsarPara) {
+        toast('Informe para quem é o reembolso.', 'erro'); return;
+      }
+
       const botao = raiz.querySelector('#dspSalvar');
       const numeroNota = raiz.querySelector('#dspNota').value.trim();
+      const diaEscolhido = Number(raiz.querySelector('#dspDia')?.value) || null;
 
       // O servidor recusa nota repetida do mesmo fornecedor (409). Aqui a
       // gente mostra o que já existe e deixa o gestor decidir — nota
       // parcelada em duas competências é caso legítimo.
       const enviar = async (confirmarDuplicidade) => {
         if (edicao) {
-          return api.put(`/api/despesas/${despesa.id}`, {
+          await api.put(`/api/despesas/${despesa.id}`, {
+            ...(diaEscolhido && diaEscolhido !== despesa.dia_id ? { dia_id: diaEscolhido } : {}),
+            reembolsar_para: reembolsarPara,
             categoria: raiz.querySelector('#dspCategoria').value,
             descricao,
             fornecedor: raiz.querySelector('#dspFornecedor').value.trim(),
@@ -343,9 +419,28 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
             status_pagamento: status,
             vencimento: status === 'Em Aberto' ? raiz.querySelector('#dspVencimento').value : '',
           }, { silencioso: true });
+          // Os dados já foram salvos; daqui em diante, erro de anexo aparece
+          // como aviso normal (não como nota duplicada).
+          // Cada passo concluído sai da fila: se um falhar, tocar em Salvar
+          // de novo continua de onde parou, sem repetir o que já foi feito.
+          for (const id of [...removidos]) {
+            await api.del(`/api/despesas/${despesa.id}/anexos/${id}`);
+            removidos.delete(id);
+            existentes.splice(existentes.findIndex((a) => a.id === id), 1);
+          }
+          if (novos.length) {
+            const envio = new FormData();
+            novos.forEach((n) => envio.append('anexos', n.arquivo));
+            const resposta = await api.form(`/api/despesas/${despesa.id}/anexos`, envio);
+            novos.length = 0;
+            existentes.splice(0, existentes.length, ...resposta.anexos);
+            desenharAnexos();
+            return resposta;
+          }
+          return null;
         }
         {
-          const diaId = raiz.querySelector('#dspDia')?.value || dia.id;
+          const diaId = diaEscolhido || dia.id;
           const dados = new FormData();
           dados.append('categoria', raiz.querySelector('#dspCategoria').value);
           dados.append('descricao', descricao);
@@ -355,6 +450,7 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
           if (numeroNota) dados.append('numero_nota', numeroNota);
           if (confirmarDuplicidade) dados.append('confirmar_duplicidade', '1');
           if (status === 'Em Aberto') dados.append('vencimento', raiz.querySelector('#dspVencimento').value || '');
+          if (status === 'Reembolso') dados.append('reembolsar_para', reembolsarPara);
           if (campoCategoria.value === 'Frete' && caixaFrete && !caixaFrete.classList.contains('hidden')) {
             const transportador = raiz.querySelector('#dspFreteTransportador').value.trim();
             if (transportador) {
@@ -378,7 +474,7 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
             dados.append('equipamento', raiz.querySelector('#dspEquipamento').value.trim() || descricao);
             dados.append('data_locacao', raiz.querySelector('#dspVencimento').value || '');
           }
-          if (anexoEscolhido) dados.append('imagem', anexoEscolhido);
+          novos.forEach((n) => dados.append('anexos', n.arquivo));
           return api.form(`/api/dias/${diaId}/despesas`, dados, { silencioso: true });
         }
       };
@@ -389,10 +485,15 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
         try {
           resposta = await enviar(false);
         } catch (erro) {
-          if (erro?.codigo !== 'nota_duplicada') throw erro;
+          if (erro?.codigo !== 'nota_duplicada') {
+            // O envio principal é silencioso por causa da nota duplicada;
+            // qualquer outro erro precisa aparecer.
+            toast('⚠ ' + erro.message, 'erro');
+            return;
+          }
           const seguir = await confirmar({
             titulo: 'Nota já lançada',
-            texto: `${erro.mensagem}\n\nLançar mesmo assim? (nota parcelada em duas competências é um caso válido)`,
+            texto: `${erro.message}\n\nLançar mesmo assim? (nota parcelada em duas competências é um caso válido)`,
             confirmar: 'Lançar mesmo assim', perigo: true,
           });
           if (!seguir) return;
@@ -411,7 +512,7 @@ export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
           toast('Locação criada — as renovações vão aparecer no painel.', 'ok');
         }
         if (resposta?.compressao?.houve_ganho) {
-          toast(`Anexo comprimido: ${resposta.compressao.original} → ${resposta.compressao.final}`, 'ok');
+          toast(`Anexos comprimidos: ${resposta.compressao.original} → ${resposta.compressao.final}`, 'ok');
         }
         fecharModal();
         toast(edicao ? 'Lançamento atualizado.' : 'Despesa lançada.', 'ok');
@@ -492,9 +593,9 @@ export async function renderizar(raiz) {
             <div class="item-sub">
               ${dataBR(x.data)} · ${esc(x.categoria)}${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}
               ${x.numero_nota ? ' · NF ' + esc(x.numero_nota) : ''}
-              ${x.parcela_total ? ` · ${x.grupo_tipo === 'frete' ? 'viagem' : 'parcela'} ${x.parcela_numero}/${x.parcela_total}` : ''}
+              ${x.parcela_total ? ` · ${x.grupo_tipo === 'frete' ? 'viagem' : 'parcela'} ${x.parcela_numero}/${x.parcela_total}` : ''}${textoReembolso(x)}
             </div>
-            ${x.anexo_url ? `<div class="item-sub"><a href="#" data-anexo="${esc(x.anexo_url)}" data-nome="${esc(x.nome_arquivo || 'anexo')}">📎 ${esc(x.nome_arquivo || 'ver anexo')}</a></div>` : ''}
+            ${htmlAnexos(x)}
           </div>
           <div class="item-valor">${moeda(x.valor)}</div>
           <div class="item-acoes">
@@ -591,7 +692,7 @@ export async function renderizar(raiz) {
 
   raiz.querySelectorAll('[data-excluir]').forEach((btn) => {
     btn.onclick = async () => {
-      const ok = await confirmar({ titulo: 'Excluir este lançamento?', texto: 'O anexo também será apagado.', perigo: true, confirmar: 'Excluir' });
+      const ok = await confirmar({ titulo: 'Excluir este lançamento?', texto: 'Os anexos também serão apagados.', perigo: true, confirmar: 'Excluir' });
       if (!ok) return;
       await api.del(`/api/despesas/${btn.dataset.excluir}`);
       toast('Lançamento removido.');
@@ -599,14 +700,7 @@ export async function renderizar(raiz) {
     };
   });
 
-  raiz.querySelectorAll('[data-anexo]').forEach((link) => {
-    link.onclick = (e) => {
-      e.preventDefault();
-      const url = link.dataset.anexo;
-      if (/\.pdf$/i.test(link.dataset.nome)) { window.open(url, '_blank', 'noopener'); return; }
-      abrirLightbox(url, link.dataset.nome);
-    };
-  });
+  ligarLinksAnexo(raiz);
 
   raiz.querySelector('[data-acao=csv]').onclick = () => baixar(`/api/semanas/${estado.semanaId}/despesas.csv`);
 }

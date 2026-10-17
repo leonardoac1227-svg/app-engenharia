@@ -72,12 +72,16 @@ def relatorio_texto(d: dict, resumo_executivo: str = "") -> str:
     L.append("5. DESPESAS DETALHADAS")
     if d["despesas"]:
         for x in d["despesas"]:
-            anexo = x["nome_arquivo"] or ("anexo" if x["imagem_path"] else "sem anexo")
+            anexos = x.get("anexos") or []
+            anexo = (f"{len(anexos)} anexo(s)" if len(anexos) > 1
+                     else x["nome_arquivo"] or ("anexo" if x["imagem_path"] else "sem anexo"))
             venc = f" · vence {data_br(x['vencimento'])}" if x["vencimento"] else ""
             forn = f" · {x['fornecedor']}" if x["fornecedor"] else ""
             nota = f" · NF {x['numero_nota']}" if x.get("numero_nota") else ""
+            reembolso = (f" · reembolsar {x['reembolsar_para']}"
+                         if x.get("reembolsar_para") else "")
             L.append(f"   - [{x['dia_semana']}] {x['categoria']} · {x['descricao']}{forn}{nota} · "
-                     f"{moeda(x['valor'])} · {x['status_pagamento']}{venc} · {anexo}")
+                     f"{moeda(x['valor'])} · {x['status_pagamento']}{reembolso}{venc} · {anexo}")
     else:
         L.append("   Nenhum lancamento de caixa nesta semana.")
     L.append("")
@@ -96,7 +100,8 @@ def despesas_csv(d: dict) -> str:
     escritor = csv.writer(buffer, delimiter=";")
     escritor.writerow([
         "Obra", "Semana", "Data", "Dia", "Categoria", "Descrição",
-        "Fornecedor", "Nota fiscal", "Valor", "Status", "Vencimento", "Pago em", "Anexo",
+        "Fornecedor", "Nota fiscal", "Valor", "Status", "Reembolsar para", "Vencimento",
+        "Pago em", "Anexos",
     ])
     for x in d["despesas"]:
         escritor.writerow([
@@ -104,8 +109,9 @@ def despesas_csv(d: dict) -> str:
             x["categoria"], x["descricao"], x["fornecedor"],
             x.get("numero_nota") or "",
             f"{x['valor']:.2f}".replace(".", ","), x["status_pagamento"],
+            x.get("reembolsar_para") or "",
             data_br(x["vencimento"]), data_br(x["pago_em"]),
-            x["nome_arquivo"] or "",
+            ", ".join(a["nome"] for a in x.get("anexos") or []) or x["nome_arquivo"] or "",
         ])
     escritor.writerow([])
     if d["financeiro"]["folha"]:

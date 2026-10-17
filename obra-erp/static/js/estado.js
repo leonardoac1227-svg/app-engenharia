@@ -19,6 +19,7 @@ export const estado = {
   funcionarios: [],
   aba: 'home',
   mostrarArquivadas: false,
+  reembolsoPadrao: 'Léo',  // nome sugerido em todo lançamento de reembolso
 };
 
 export const podeLancar = () => !!estado.usuario?.pode_lancar;

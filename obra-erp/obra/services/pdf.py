@@ -375,9 +375,15 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
                 rodape.append(f'NF {escape(x["numero_nota"])}')
             if rodape:
                 desc += f'<br/><font color="{CINZA.hexval()}" size="7">{" · ".join(rodape)}</font>'
-            if x["nome_arquivo"]:
-                desc += f'<br/><font color="{CINZA.hexval()}" size="7">anexo: {escape(x["nome_arquivo"])}</font>'
+            nomes_anexos = [a["nome"] for a in x.get("anexos") or []] or (
+                [x["nome_arquivo"]] if x["nome_arquivo"] else [])
+            if nomes_anexos:
+                rotulo = "anexo" if len(nomes_anexos) == 1 else "anexos"
+                desc += (f'<br/><font color="{CINZA.hexval()}" size="7">'
+                         f'{rotulo}: {escape(", ".join(nomes_anexos))}</font>')
             status = x["status_pagamento"]
+            if x.get("reembolsar_para") and status == "Reembolso":
+                status += f"<br/><font size='7'>p/ {escape(x['reembolsar_para'])}</font>"
             if x["vencimento"] and status == "Em Aberto":
                 status += f"<br/><font size='7'>vence {data_br(x['vencimento'])}</font>"
             linhas.append([

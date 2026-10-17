@@ -323,6 +323,7 @@ async function iniciar() {
 
   estado.usuario = inicio.usuario;
   estado.versao = inicio.versao || '';
+  if (inicio.reembolso_padrao) estado.reembolsoPadrao = inicio.reembolso_padrao;
   definirCsrf(inicio.csrf);
   $('#btnPerfil').textContent = iniciais(inicio.usuario.nome);
   ajustarPermissoes();

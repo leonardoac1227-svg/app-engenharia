@@ -79,6 +79,9 @@ for d in ['Segunda','Terça','Quarta','Quinta','Sexta','Sábado','Domingo']:
 c.execute("INSERT INTO funcionarios (obra_id,nome,funcao,valor_hora,ativo,criado_em) VALUES (1,'Zé','Pedreiro',25,1,?)", (ag,))
 c.execute("""INSERT INTO despesas (dia_id,categoria,descricao,fornecedor,valor,status_pagamento,criado_em)
              VALUES (1,'Material','Cimento antigo','Casa do Construtor',500,'Pago',?)""", (ag,))
+# lançamento antigo com o anexo único na própria linha
+c.execute("""INSERT INTO despesas (dia_id,categoria,descricao,valor,status_pagamento,imagem_path,
+             nome_arquivo,criado_em) VALUES (1,'Material','Areia com nota',200,'Pago','antigo.pdf','nf.pdf',?)""", (ag,))
 c.execute("INSERT INTO contratos (obra_id,empresa,servico,valor_total,status,criado_em) VALUES (1,'Pinturas','Pintura',10000,'ativo',?)", (ag,))
 c.commit(); c.close()
 
@@ -98,6 +101,9 @@ depois = sqlite3.connect(BANCO)
 def colunas(t): return {r[1] for r in depois.execute(f"PRAGMA table_info({t})")}
 ok('numero_nota' in colunas('despesas'), 'migração adiciona numero_nota', colunas('despesas'))
 ok('tipo_contrato' in colunas('funcionarios'), 'migração adiciona tipo_contrato', colunas('funcionarios'))
+ok('reembolsar_para' in colunas('despesas'), 'migração adiciona reembolsar_para')
+copiados = depois.execute("SELECT despesa_id, arquivo, nome_original FROM despesa_anexos").fetchall()
+ok(copiados == [(2, 'antigo.pdf', 'nf.pdf')], 'anexo antigo vira linha em despesa_anexos', copiados)
 ok('chave_pix' in colunas('funcionarios'), 'migração adiciona chave_pix')
 ok('funcionario_id' in colunas('contratos'), 'migração adiciona funcionario_id em contratos')
 depois.close()

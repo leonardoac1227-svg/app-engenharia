@@ -267,7 +267,8 @@ ROTULO_STATUS = {"Em Aberto": "A PAGAR", "Reembolso": "REEMBOLSO", "Pago": "PAGO
 def _itens_de_despesas(despesas: list[dict], status_alvo: str) -> list[dict]:
     return [{
         "fornecedor": d.get("fornecedor") or d.get("categoria") or "-",
-        "descricao": d.get("descricao") or "",
+        "descricao": (d.get("descricao") or "") + (
+            f" · reembolsar {d['reembolsar_para']}" if d.get("reembolsar_para") else ""),
         "data": d.get("data"),
         "documento": d.get("numero_nota") or "-",
         "valor": d.get("valor") or 0,
