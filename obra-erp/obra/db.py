@@ -395,6 +395,7 @@ CREATE TABLE IF NOT EXISTS horas (
     funcionario_id INTEGER NOT NULL,
     horas_trabalhadas REAL NOT NULL DEFAULT 0,
     valor_hora REAL NOT NULL DEFAULT 0,
+    justificativa TEXT DEFAULT '',
     UNIQUE (dia_id, funcionario_id),
     FOREIGN KEY (dia_id) REFERENCES dias (id) ON DELETE CASCADE,
     FOREIGN KEY (funcionario_id) REFERENCES funcionarios (id) ON DELETE CASCADE
@@ -615,6 +616,7 @@ COLUNAS_EXTRAS = [
     ("funcionarios", "chave_pix", "TEXT DEFAULT ''"),
     ("contratos", "funcionario_id", "INTEGER"),
     ("horas", "valor_hora", "REAL NOT NULL DEFAULT 0"),
+    ("horas", "justificativa", "TEXT DEFAULT ''"),
     ("despesas", "etapa_id", "INTEGER"),
     ("despesas", "fornecedor", "TEXT DEFAULT ''"),
     ("despesas", "vencimento", "TEXT"),

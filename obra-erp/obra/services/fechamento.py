@@ -18,6 +18,7 @@ from .anexos_despesa import anexar_lista
 from .fretes import resumo_semana as resumo_fretes
 from .locacoes import alertas as alertas_locacoes
 from .parcelamento import sql_fora_da_semana
+from .ponto import ocorrencias_da_semana
 
 INDICE_DIA = {nome: i for i, nome in enumerate(DIAS_SEMANA)}
 
@@ -256,6 +257,8 @@ def dados_fechamento(semana_id: int) -> dict:
         "despesas": despesas,
         "despesas_por_categoria": por_categoria,
         "folha_detalhada": folha_detalhada,
+        # Presença sem valores: horas por pessoa e faltas com justificativa.
+        "ponto_equipe": ocorrencias_da_semana(semana["obra_id"], dias),
         "fotos": fotos,
         "financeiro": {
             "folha_paga": bool(semana["folha_paga"]),

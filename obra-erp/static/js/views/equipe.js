@@ -7,7 +7,7 @@ import { api } from '../api.js';
 import { estado, podeAdministrar } from '../estado.js';
 import { recarregarObra } from '../navegacao.js';
 import {
-  abrirModal, confirmar, esc, esqueleto, fecharModal, kpi, num, toast, vazio,
+  abrirModal, confirmar, dataCurta, esc, esqueleto, fecharModal, kpi, num, toast, vazio,
 } from '../util.js';
 
 let mostrarInativos = false;
@@ -22,7 +22,11 @@ export async function renderizar(raiz) {
   ]);
 
   const ativos = funcionarios.filter((f) => f.ativo);
-  const horasPorPessoa = fechamento?.folha_detalhada || [];
+  // Presença da semana (com as faltas); semanas sem esse dado caem na lista antiga.
+  const ponto = fechamento?.ponto_equipe;
+  const horasPorPessoa = ponto
+    ? [...ponto.equipe].sort((a, b) => b.horas - a.horas)
+    : (fechamento?.folha_detalhada || []);
   const indicadores = fechamento?.indicadores || {};
 
   raiz.innerHTML = `
@@ -50,8 +54,13 @@ export async function renderizar(raiz) {
                 <span>${num(p.horas, 1)} h</span>
               </div>
               <div class="progresso-trilho"><div class="progresso-preenchido" style="width:${(p.horas / maior) * 100}%;background:var(--brass)"></div></div>
+              ${(p.ocorrencias || []).map((o) => `
+                <div class="ocorrencia-ponto ${o.justificativa ? '' : 'pendente'}">${esc(o.texto)}</div>`).join('')}
             </div>`;
         }).join('')}
+        ${ponto?.dias_sem_ponto?.length ? `
+          <div class="ocorrencia-ponto pendente">Ponto não lançado: ${ponto.dias_sem_ponto
+            .map((d) => `${esc(d.dia_semana)} ${dataCurta(d.data)}`).join(', ')}</div>` : ''}
       </div>` : ''}
 
     <div class="section-head"><h3>Cadastro</h3>

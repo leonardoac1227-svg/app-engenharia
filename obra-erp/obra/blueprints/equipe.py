@@ -3,6 +3,8 @@
 
 O ponto serve só para controle de presença: não há mais valor/hora nem folha
 calculada pelo app — pagamentos da equipe são lançados como despesa no Caixa.
+Abaixo da jornada (8 h), o ponto guarda a justificativa da falta; uma falta
+justificada fica registrada mesmo com zero hora (ver `services/ponto.py`).
 Pontos antigos guardam o valor/hora da época (`horas.valor_hora`) e esse valor
 é preservado ao reeditar o dia, para não mudar fechamentos já entregues.
 """
@@ -11,6 +13,7 @@ from __future__ import annotations
 
 from flask import Blueprint, jsonify, request
 
+from .. import config
 from ..db import executar, get_db, registrar_auditoria, todos, um
 from ..security import (exigir_lancamento, garantir_acesso_obra, login_obrigatorio,
                         obra_do_funcionario, obra_do_dia, papel_obrigatorio, usuario_atual)
@@ -93,8 +96,11 @@ def desativar(funcionario_id: int):
 @login_obrigatorio
 def obter_horas(dia_id: int):
     obra_do_dia(dia_id)
-    rows = todos("SELECT funcionario_id, horas_trabalhadas FROM horas WHERE dia_id = ?", (dia_id,))
-    return jsonify({str(r["funcionario_id"]): {"horas": r["horas_trabalhadas"]} for r in rows})
+    rows = todos("SELECT funcionario_id, horas_trabalhadas, justificativa FROM horas WHERE dia_id = ?",
+                 (dia_id,))
+    return jsonify({str(r["funcionario_id"]): {"horas": r["horas_trabalhadas"],
+                                              "justificativa": r["justificativa"] or ""}
+                    for r in rows})
 
 
 @bp.put("/dias/<int:dia_id>/horas")
@@ -115,17 +121,21 @@ def salvar_horas(dia_id: int):
         if funcionario_id not in validos:
             continue
         horas = numero(reg.get("horas"), 0, 0, 24, "as horas")
-        if horas <= 0:
+        # Jornada cumprida não tem o que justificar.
+        justificativa = "" if horas >= config.JORNADA_HORAS else texto(reg.get("justificativa"), 160)
+        if horas <= 0 and not justificativa:
             db.execute("DELETE FROM horas WHERE dia_id = ? AND funcionario_id = ?", (dia_id, funcionario_id))
             continue
         # Ponto novo entra com valor/hora zero (só presença); o de um dia
-        # antigo mantém o valor gravado na época.
+        # antigo mantém o valor gravado na época. Falta justificada fica com
+        # zero hora, para o motivo não se perder.
         db.execute(
-            """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora)
-               VALUES (?, ?, ?, 0)
+            """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora, justificativa)
+               VALUES (?, ?, ?, 0, ?)
                ON CONFLICT(dia_id, funcionario_id)
-               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas""",
-            (dia_id, funcionario_id, horas),
+               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas,
+                             justificativa = excluded.justificativa""",
+            (dia_id, funcionario_id, horas, justificativa),
         )
         total += horas
     db.commit()
@@ -149,7 +159,7 @@ def repetir_ponto(dia_id: int):
         """SELECT h.dia_id FROM horas h
              JOIN dias d ON d.id = h.dia_id
              JOIN semanas s ON s.id = d.semana_id
-            WHERE s.obra_id = ? AND d.id <> ?
+            WHERE s.obra_id = ? AND d.id <> ? AND h.horas_trabalhadas > 0
               AND d.data < (SELECT data FROM dias WHERE id = ?)
             ORDER BY d.data DESC LIMIT 1""",
         (obra_id, dia_id, dia_id),
@@ -160,17 +170,19 @@ def repetir_ponto(dia_id: int):
     origem = todos(
         """SELECT h.funcionario_id, h.horas_trabalhadas
              FROM horas h JOIN funcionarios f ON f.id = h.funcionario_id
-            WHERE h.dia_id = ? AND f.ativo = 1""", (referencia["dia_id"],))
+            WHERE h.dia_id = ? AND f.ativo = 1 AND h.horas_trabalhadas > 0""",
+        (referencia["dia_id"],))
     if not origem:
         raise ApiErro("O último ponto lançado não tem funcionários ativos.", 404)
 
     db = get_db()
     for r in origem:
         db.execute(
-            """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora)
-               VALUES (?, ?, ?, 0)
+            """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora, justificativa)
+               VALUES (?, ?, ?, 0, '')
                ON CONFLICT(dia_id, funcionario_id)
-               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas""",
+               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas,
+                             justificativa = ''""",
             (dia_id, r["funcionario_id"], r["horas_trabalhadas"]),
         )
     db.commit()

@@ -15,6 +15,12 @@ import { abrirModalDespesa, htmlAnexos, ligarLinksAnexo, textoReembolso } from '
 let cacheDia = { horas: {}, despesas: [] };
 const secoesAbertas = {};
 
+// Sugestões que aparecem ao tocar no campo de justificativa (dá para digitar outra).
+const MOTIVOS_FALTA = [
+  'Atestado médico', 'Chuva / obra parada', 'Falta sem aviso', 'Dispensado pelo encarregado',
+  'Saiu mais cedo (combinado)', 'Chegou atrasado', 'Folga combinada', 'Problema familiar',
+];
+
 function diaSelecionado() {
   if (!estado.dias.length) return null;
   if (estado.diaAtivo) {
@@ -119,7 +125,7 @@ export async function renderizar(raiz) {
           ${somenteLeitura ? '' : `
             <div class="btn-linha" style="margin-top:4px">
               <button class="btn btn-ghost btn-small" data-acao="repetir-ponto" style="flex:1">↺ Repetir último dia</button>
-              <button class="btn btn-ghost btn-small" data-acao="jornada-padrao" style="flex:1">8h para todos</button>
+              <button class="btn btn-ghost btn-small" data-acao="jornada-padrao" style="flex:1">${num(estado.jornadaHoras)}h para todos</button>
             </div>` }
           <div class="lista" id="listaPonto" style="margin-top:12px">
             ${estado.funcionarios.map((f) => {
@@ -140,9 +146,18 @@ export async function renderizar(raiz) {
                       <button type="button" data-passo="1" ${somenteLeitura ? 'disabled' : ''}>+</button>
                     </div>
                   </div>
+                  <div class="ponto-falta hidden" data-falta="${f.id}">
+                    <span class="ponto-falta-rotulo"></span>
+                    <input type="text" class="campo-justificativa" data-func="${f.id}" list="motivosFalta"
+                           maxlength="160" autocomplete="off" placeholder="Justificativa (ex: atestado médico)"
+                           value="${esc(registro?.justificativa || '')}" ${somenteLeitura ? 'disabled' : ''}>
+                  </div>
                 </div>`;
             }).join('')}
           </div>
+          <datalist id="motivosFalta">
+            ${MOTIVOS_FALTA.map((m) => `<option value="${esc(m)}"></option>`).join('')}
+          </datalist>
           <div class="ledger-total" id="totalHorasDia"></div>
           ${somenteLeitura ? '' : '<button class="btn btn-brass" data-acao="salvar-ponto">Salvar ponto do dia</button>'}
         ` : vazio('☰', 'Nenhum profissional cadastrado nesta obra.',
@@ -268,12 +283,37 @@ function ligarEventos(raiz, dia) {
     alvo.textContent = `${presentes} PRESENTE(S) · ${num(horas, 1)} h`;
   };
   camposHoras.forEach((inp) => inp.addEventListener('input', atualizarTotal));
+
+  // Abaixo da jornada, de segunda a sexta, o ponto pede o motivo. Só aparece
+  // depois que o ponto do dia começou a ser lançado: dia ainda em branco não
+  // é falta de ninguém.
+  const jornada = estado.jornadaHoras;
+  const camposJustificativa = Array.from(raiz.querySelectorAll('.campo-justificativa'));
+  const atualizarFaltas = () => {
+    const comecou = dia.tem_ponto
+      || camposHoras.some((inp) => parseFloat(inp.value) > 0)
+      || camposJustificativa.some((inp) => inp.value.trim());
+    camposHoras.forEach((inp) => {
+      const caixa = raiz.querySelector(`[data-falta="${inp.dataset.func}"]`);
+      const horasPessoa = parseFloat(inp.value) || 0;
+      const mostrar = dia.util && comecou && horasPessoa < jornada;
+      caixa.classList.toggle('hidden', !mostrar);
+      if (!mostrar) return;
+      caixa.querySelector('.ponto-falta-rotulo').textContent = horasPessoa <= 0 ? 'Falta'
+        : Math.abs(horasPessoa - jornada / 2) < 0.01 ? 'Meio turno'
+          : `Faltaram ${num(jornada - horasPessoa, 1)} h`;
+    });
+  };
+  camposHoras.forEach((inp) => inp.addEventListener('input', atualizarFaltas));
+  camposJustificativa.forEach((inp) => inp.addEventListener('input', atualizarFaltas));
+  atualizarFaltas();
   raiz.querySelectorAll('[data-passo]').forEach((btn) => {
     btn.onclick = () => {
       const input = btn.parentElement.querySelector('.campo-horas');
       const novo = Math.min(24, Math.max(0, (parseFloat(input.value) || 0) + Number(btn.dataset.passo)));
       input.value = novo || '';
       atualizarTotal();
+      atualizarFaltas();
     };
   });
   atualizarTotal();
@@ -281,9 +321,10 @@ function ligarEventos(raiz, dia) {
   const btnJornada = raiz.querySelector('[data-acao=jornada-padrao]');
   if (btnJornada) {
     btnJornada.onclick = () => {
-      camposHoras.forEach((inp) => { inp.value = 8; });
+      camposHoras.forEach((inp) => { inp.value = jornada; });
       atualizarTotal();
-      toast('8h preenchidas — confira e salve.');
+      atualizarFaltas();
+      toast(`${num(jornada)}h preenchidas — confira e salve.`);
     };
   }
 
@@ -301,9 +342,15 @@ function ligarEventos(raiz, dia) {
     btnSalvarPonto.onclick = async () => {
       btnSalvarPonto.disabled = true;
       try {
-        const registros = camposHoras.map((inp) => ({
-          funcionario_id: Number(inp.dataset.func), horas: parseFloat(inp.value) || 0,
-        }));
+        const registros = camposHoras.map((inp) => {
+          const horasPessoa = parseFloat(inp.value) || 0;
+          const motivo = raiz.querySelector(`.campo-justificativa[data-func="${inp.dataset.func}"]`);
+          return {
+            funcionario_id: Number(inp.dataset.func),
+            horas: horasPessoa,
+            justificativa: horasPessoa < jornada ? (motivo?.value.trim() || '') : '',
+          };
+        });
         await api.put(`/api/dias/${dia.id}/horas`, { registros });
         toast('Ponto salvo.', 'ok');
         await recarregarSemana({ manterDia: true });

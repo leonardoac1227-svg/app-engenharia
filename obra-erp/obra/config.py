@@ -17,6 +17,8 @@ ADMIN_NOME      Nome exibido do primeiro usuário.
 ANTHROPIC_API_KEY  Habilita o resumo executivo semanal por IA (opcional).
 MAX_UPLOAD_MB   Tamanho máximo de cada envio (padrão 25 MB).
 REEMBOLSO_PADRAO  Quem recebe o reembolso quando ninguém é informado (padrão: Léo).
+JORNADA_HORAS   Horas de um dia completo de trabalho (padrão 8). Abaixo disso, de
+                segunda a sexta, o ponto pede justificativa e o relatório avisa.
 """
 
 from __future__ import annotations
@@ -58,6 +60,10 @@ PAPEIS = {
 CATEGORIAS_PADRAO = ["Material", "Serviço", "Locação", "Frete", "Alimentação", "Outro"]
 STATUS_PAGAMENTO = ["Reembolso", "Em Aberto", "Pago"]
 REEMBOLSO_PADRAO = os.environ.get("REEMBOLSO_PADRAO", "Léo").strip() or "Léo"
+try:
+    JORNADA_HORAS = float(os.environ.get("JORNADA_HORAS", "8").replace(",", ".")) or 8.0
+except ValueError:
+    JORNADA_HORAS = 8.0
 
 ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "gestor@obra.local")
 ADMIN_SENHA = os.environ.get("ADMIN_SENHA", "obra123")

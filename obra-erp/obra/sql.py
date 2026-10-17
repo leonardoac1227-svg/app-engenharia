@@ -171,6 +171,7 @@ CREATE TABLE IF NOT EXISTS horas (
     funcionario_id BIGINT NOT NULL REFERENCES funcionarios (id) ON DELETE CASCADE,
     horas_trabalhadas DOUBLE PRECISION NOT NULL DEFAULT 0,
     valor_hora DOUBLE PRECISION NOT NULL DEFAULT 0,
+    justificativa TEXT DEFAULT '',
     UNIQUE (dia_id, funcionario_id)
 );
 

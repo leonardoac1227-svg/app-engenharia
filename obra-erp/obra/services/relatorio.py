@@ -62,11 +62,17 @@ def relatorio_texto(d: dict, resumo_executivo: str = "") -> str:
         L.append(f"   - Saldo da semana: {moeda(f['saldo'])}")
     L.append("")
 
-    if d["folha_detalhada"]:
-        L.append("4. FOLHA POR PROFISSIONAL")
-        for p in d["folha_detalhada"]:
+    ponto = d.get("ponto_equipe") or {}
+    if ponto.get("equipe") or ponto.get("dias_sem_ponto"):
+        L.append("4. PONTO DA EQUIPE (presenca, sem valores)")
+        for p in ponto.get("equipe") or []:
             funcao = f" ({p['funcao']})" if p["funcao"] else ""
-            L.append(f"   - {p['nome']}{funcao}: {numero_br(p['horas'], 1)} h · {moeda(p['total'])}")
+            L.append(f"   - {p['nome']}{funcao}: {numero_br(p['horas'], 1)} h")
+            for o in p["ocorrencias"]:
+                L.append(f"       · {o['texto']}")
+        if ponto.get("dias_sem_ponto"):
+            L.append("   Ponto nao lancado em: " + ", ".join(
+                f"{x['dia_semana']} {data_br(x['data'])}" for x in ponto["dias_sem_ponto"]))
         L.append("")
 
     L.append("5. DESPESAS DETALHADAS")
