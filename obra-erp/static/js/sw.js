@@ -14,7 +14,7 @@
    cache, muda o sw.js em bytes e força a atualização.
    ========================================================================== */
 
-const VERSAO = 19;
+const VERSAO = 20;
 const CACHE = `obra-erp-v${VERSAO}`;
 
 const ESTATICOS = [

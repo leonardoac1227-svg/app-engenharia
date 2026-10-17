@@ -4,7 +4,7 @@
    views e centraliza o ciclo de recarga de dados.
    ========================================================================== */
 
-import { api, definirCsrf } from './api.js';
+import { aoAtualizarEmSegundoPlano, api, definirCsrf, preaquecer } from './api.js';
 import {
   abaPreferida, estado, obraPreferida, podeAdministrar, podeFinanceiro, podeLancar,
   salvarAbaPreferida, salvarObraPreferida,
@@ -75,7 +75,64 @@ async function renderizarAtual() {
   }
   atualizarAlertasTabbar();
   atualizarFab();
+  agendarPreaquecimento();
 }
+
+/* ---------------------------------------------------------- pré-carregamento
+
+   Depois que a tela atual aparece, aproveita o tempo ocioso para buscar o que
+   as outras abas vão pedir. Quando o usuário toca na aba, o dado já está em
+   memória e a tela abre sem esqueleto. As URLs aqui precisam ser idênticas às
+   que cada view pede — é o caminho que serve de chave do cache.
+   -------------------------------------------------------------------------- */
+
+let preaquecimentoAgendado = false;
+
+function agendarPreaquecimento() {
+  if (preaquecimentoAgendado || !estado.obraId) return;
+  if (navigator.connection?.saveData) return;
+  preaquecimentoAgendado = true;
+  const ocioso = window.requestIdleCallback || ((fn) => setTimeout(fn, 400));
+  ocioso(() => {
+    preaquecimentoAgendado = false;
+    if (!navigator.onLine || !estado.obraId) return;
+
+    const caminhos = [`/api/obras/${estado.obraId}/dashboard`];
+    if (estado.usuario?.papel !== 'cliente') caminhos.push(`/api/obras/${estado.obraId}/funcionarios`);
+    if (estado.semanaId) {
+      caminhos.push(`/api/semanas/${estado.semanaId}/fechamento`);
+      caminhos.push(`/api/semanas/${estado.semanaId}/arquivos`);
+    }
+    if (podeFinanceiro()) {
+      caminhos.push(`/api/obras/${estado.obraId}/financeiro`);
+      caminhos.push(`/api/obras/${estado.obraId}/locacoes`);
+    }
+
+    // O diário abre no dia de hoje; dentro dele, a semana inteira fica pronta
+    // e a troca de dia passa a ser instantânea.
+    const hoje = estado.dias.find((d) => d.hoje) || estado.dias.find((d) => d.util) || estado.dias[0];
+    const dias = estado.aba === 'diario' ? estado.dias : (hoje ? [hoje] : []);
+    dias.forEach((d) => {
+      caminhos.push(`/api/dias/${d.id}/horas`);
+      if (podeFinanceiro()) caminhos.push(`/api/dias/${d.id}/despesas`);
+    });
+    preaquecer(caminhos);
+  }, { timeout: 1500 });
+}
+
+/* A conferência de fundo achou dado novo (lançado em outro aparelho):
+   redesenha, mas nunca no meio de uma digitação ou com um diálogo aberto. */
+let redesenhoPendente;
+aoAtualizarEmSegundoPlano(() => {
+  clearTimeout(redesenhoPendente);
+  redesenhoPendente = setTimeout(() => {
+    const raiz = $(VIEWS[estado.aba]?.el);
+    const digitando = raiz && raiz.contains(document.activeElement)
+      && /^(INPUT|TEXTAREA|SELECT)$/.test(document.activeElement.tagName);
+    if (digitando || $('#modalOverlay').classList.contains('open')) return;
+    renderizarAtual();
+  }, 120);
+});
 
 function atualizarAlertasTabbar() {
   const pendentes = estado.dias.filter((d) => d.pendente).length;
