@@ -179,6 +179,9 @@ function ligarEventos(raiz, dia) {
 
   raiz.querySelectorAll('[data-dia]').forEach((btn) => {
     btn.onclick = async () => {
+      // marca o dia tocado já, antes de os dados chegarem
+      raiz.querySelectorAll('.dia-btn.ativo').forEach((b) => b.classList.remove('ativo'));
+      btn.classList.add('ativo');
       estado.diaAtivo = estado.dias.find((d) => d.id === Number(btn.dataset.dia));
       await renderizar(raiz);
       raiz.scrollIntoView({ behavior: 'smooth', block: 'start' });

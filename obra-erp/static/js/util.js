@@ -228,7 +228,7 @@ export const classeSeloObra = (status, arquivada = false) => (
    Recebe [{ rotulo, valor }] e devolve o HTML pronto com legenda.
    -------------------------------------------------------------------------- */
 
-const CORES_ROSCA = ['#4F46E5', '#8B5CF6', '#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#64748B'];
+const CORES_ROSCA = ['#4E6E5D', '#B98B5E', '#8FA9A0', '#C9B48A', '#7D7468', '#B8685E', '#A9A79F'];
 
 export function rosca(itens, { titulo = 'TOTAL', formatar = (v) => v } = {}) {
   const dados = itens.filter((i) => i.valor > 0).slice(0, 7);
