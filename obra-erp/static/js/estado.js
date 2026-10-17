@@ -20,6 +20,7 @@ export const estado = {
   aba: 'home',
   mostrarArquivadas: false,
   reembolsoPadrao: 'Léo',  // nome sugerido em todo lançamento de reembolso
+  jornadaHoras: 8,         // abaixo disso (seg a sex) o ponto pede justificativa
 };
 
 export const podeLancar = () => !!estado.usuario?.pode_lancar;

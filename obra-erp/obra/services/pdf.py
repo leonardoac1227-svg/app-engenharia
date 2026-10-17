@@ -343,22 +343,26 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
     ]))
     E.append(t)
 
-    # ---- folha por profissional (semanas antigas) ----
-    if fin["folha"] and d["folha_detalhada"]:
-        E.append(Paragraph("FOLHA POR PROFISSIONAL", estilos["secao"]))
-        linhas = [["PROFISSIONAL", "FUNÇÃO", "HORAS", "TOTAL"]]
-        for p in d["folha_detalhada"]:
+    # ---- ponto da equipe: presença e faltas, sem valor por pessoa ----
+    ponto = d.get("ponto_equipe") or {}
+    if ponto.get("equipe") or ponto.get("dias_sem_ponto"):
+        E.append(Paragraph("PONTO DA EQUIPE", estilos["secao"]))
+        linhas = [["PROFISSIONAL", "HORAS", "OCORRÊNCIAS"]]
+        for p in ponto.get("equipe") or []:
+            nome = escape(p["nome"]) + (
+                f'<br/><font color="{CINZA.hexval()}" size="7">{escape(p["funcao"])}</font>'
+                if p["funcao"] else "")
+            ocorrencias = "<br/>".join(escape(o["texto"]) for o in p["ocorrencias"]) or "—"
             linhas.append([
-                Paragraph(escape(p["nome"]), estilos["celula"]),
-                Paragraph(escape(p["funcao"] or "—"), estilos["celula"]),
+                Paragraph(nome, estilos["celula"]),
                 Paragraph(f"{numero_br(p['horas'], 1)}", estilos["celula_dir"]),
-                Paragraph(moeda(p["total"]), estilos["celula_dir"]),
+                Paragraph(ocorrencias, estilos["celula"]),
             ])
-        linhas.append(["", Paragraph("<b>TOTAL</b>", estilos["celula_dir"]),
-                       Paragraph(f"<b>{numero_br(ind['total_horas'], 1)}</b>", estilos["celula_dir"]),
-                       Paragraph(f"<b>{moeda(fin['folha'])}</b>", estilos["celula_dir"])])
-        E.append(_tabela(linhas, [LARGURA_UTIL - 100 * mm, 40 * mm, 25 * mm, 35 * mm], estilos,
-                         alinhar_direita=(2, 3)))
+        E.append(_tabela(linhas, [45 * mm, 18 * mm, LARGURA_UTIL - 63 * mm], estilos,
+                         alinhar_direita=(1,)))
+        if ponto.get("dias_sem_ponto"):
+            esquecidos = ", ".join(f"{x['dia_semana']} {data_br(x['data'])}" for x in ponto["dias_sem_ponto"])
+            E.append(Paragraph(f"• Ponto não lançado em: {escape(esquecidos)}", estilos["corpo"]))
 
     # ---- despesas ----
     E.append(Paragraph("DESPESAS DA SEMANA", estilos["secao"]))
