@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-"""Equipe e folha: cadastro de funcionários e lançamento de ponto.
+"""Equipe: cadastro de funcionários e lançamento de ponto.
 
-Regra de ouro mantida da v1 e reforçada aqui: ao salvar o ponto gravamos um
-*snapshot* do valor/hora vigente (`horas.valor_hora`). Reajustar o valor de um
-pedreiro hoje não pode alterar o fechamento de uma semana já entregue ao
-cliente — isso é o que separa um controle confiável de uma planilha.
+O ponto serve só para controle de presença: não há mais valor/hora nem folha
+calculada pelo app — pagamentos da equipe são lançados como despesa no Caixa.
+Pontos antigos guardam o valor/hora da época (`horas.valor_hora`) e esse valor
+é preservado ao reeditar o dia, para não mudar fechamentos já entregues.
 """
 
 from __future__ import annotations
@@ -20,63 +20,17 @@ bp = Blueprint("equipe", __name__, url_prefix="/api")
 
 
 
-TIPOS_CONTRATO = ("fixo", "producao")
-
-
-def _validar_contratacao(dados: dict) -> tuple[str, float]:
-    """Aplica a regra do tipo de contrato.
-
-    - **Fixo**: paga-se por hora trabalhada, então o valor/hora é obrigatório —
-      sem ele a folha da semana sairia zerada sem ninguém perceber.
-    - **Por produção**: o pagamento vem de tarefas medidas por percentual, não
-      de horas. O valor/hora é forçado a zero para o profissional nunca ser
-      cobrado duas vezes (uma no ponto, outra na medição da tarefa).
-    """
-    tipo = dados.get("tipo_contrato") if dados.get("tipo_contrato") in TIPOS_CONTRATO else "fixo"
-
-    if tipo == "producao":
-        return tipo, 0.0
-
-    valor_hora = numero(dados.get("valor_hora"), 0, 0, campo="o valor da hora")
-    if valor_hora <= 0:
-        raise ApiErro(
-            "Profissional com contrato fixo precisa de um valor da hora. "
-            "Se ele é pago por tarefa, marque o tipo como 'Por produção'.")
-    return tipo, valor_hora
-
 @bp.get("/obras/<int:obra_id>/funcionarios")
 @login_obrigatorio
 def listar(obra_id: int):
     garantir_acesso_obra(obra_id)
     incluir_inativos = request.args.get("inativos") == "1"
-    sql = """SELECT f.id, f.nome, f.funcao, f.valor_hora, f.documento, f.telefone,
-                    f.ativo, f.tipo_contrato, f.chave_pix,
-                    COALESCE((SELECT COUNT(*) FROM contratos c
-                               WHERE c.funcionario_id = f.id), 0) AS tarefas,
-                    COALESCE((SELECT SUM(c.valor_total) FROM contratos c
-                               WHERE c.funcionario_id = f.id AND c.status != 'cancelado'), 0) AS contratado,
-                    COALESCE((SELECT SUM(m.valor) FROM contrato_medicoes m
-                               JOIN contratos c ON c.id = m.contrato_id
-                              WHERE c.funcionario_id = f.id), 0) AS medido
+    sql = """SELECT f.id, f.nome, f.funcao, f.documento, f.telefone, f.ativo, f.chave_pix
                FROM funcionarios f WHERE f.obra_id = ?"""
     if not incluir_inativos:
         sql += " AND f.ativo = 1"
     sql += " ORDER BY f.ativo DESC, f.nome COLLATE NOCASE"
-
-    funcionarios = []
-    for linha in todos(sql, (obra_id,)):
-        f = dict(linha)
-        f["por_producao"] = f.get("tipo_contrato") == "producao"
-        f["contratado"] = round(float(f.get("contratado") or 0), 2)
-        f["medido"] = round(float(f.get("medido") or 0), 2)
-        f["saldo_tarefas"] = round(max(f["contratado"] - f["medido"], 0), 2)
-        funcionarios.append(f)
-
-    if usuario_atual()["papel"] != "gestor":
-        for f in funcionarios:  # mestre lança horas, mas não vê valores
-            f["valor_hora"] = None
-            f["contratado"] = f["medido"] = f["saldo_tarefas"] = None
-    return jsonify(funcionarios)
+    return jsonify([dict(linha) for linha in todos(sql, (obra_id,))])
 
 
 @bp.post("/obras/<int:obra_id>/funcionarios")
@@ -85,14 +39,13 @@ def criar(obra_id: int):
     garantir_acesso_obra(obra_id)
     dados = request.get_json(silent=True) or {}
     nome = texto(dados.get("nome"), 120, True, "o nome do funcionário")
-    tipo, valor_hora = _validar_contratacao(dados)
 
     cur = executar(
         """INSERT INTO funcionarios (obra_id, nome, funcao, tipo_contrato, chave_pix, valor_hora,
                                      documento, telefone, ativo, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)""",
-        (obra_id, nome, texto(dados.get("funcao"), 80), tipo,
-         texto(dados.get("chave_pix"), 120), valor_hora,
+           VALUES (?, ?, ?, 'fixo', ?, 0, ?, ?, 1, ?)""",
+        (obra_id, nome, texto(dados.get("funcao"), 80),
+         texto(dados.get("chave_pix"), 120),
          texto(dados.get("documento"), 40), texto(dados.get("telefone"), 40), agora_iso()),
     )
     registrar_auditoria(usuario_atual(), "criou_funcionario", "funcionario", cur.lastrowid, nome)
@@ -104,20 +57,10 @@ def criar(obra_id: int):
 def atualizar(funcionario_id: int):
     obra_do_funcionario(funcionario_id)
     dados = request.get_json(silent=True) or {}
-    atual = um("SELECT * FROM funcionarios WHERE id = ?", (funcionario_id,))
-    if "tipo_contrato" in dados or "valor_hora" in dados:
-        base = {"tipo_contrato": dados.get("tipo_contrato", atual["tipo_contrato"]),
-                "valor_hora": dados.get("valor_hora", atual["valor_hora"])}
-        tipo, valor_hora = _validar_contratacao(base)
-        dados["tipo_contrato"] = tipo
-        dados["valor_hora"] = valor_hora
-
     mapa = {
         "nome": lambda v: texto(v, 120, True, "o nome do funcionário"),
         "funcao": lambda v: texto(v, 80),
-        "tipo_contrato": lambda v: v if v in TIPOS_CONTRATO else "fixo",
         "chave_pix": lambda v: texto(v, 120),
-        "valor_hora": lambda v: numero(v, 0, 0, campo="o valor da hora"),
         "documento": lambda v: texto(v, 40),
         "telefone": lambda v: texto(v, 40),
         "ativo": lambda v: 1 if v else 0,
@@ -150,15 +93,8 @@ def desativar(funcionario_id: int):
 @login_obrigatorio
 def obter_horas(dia_id: int):
     obra_do_dia(dia_id)
-    mostrar_valores = usuario_atual()["papel"] == "gestor"
-    rows = todos(
-        "SELECT funcionario_id, horas_trabalhadas, valor_hora FROM horas WHERE dia_id = ?", (dia_id,))
-    return jsonify({
-        str(r["funcionario_id"]): {
-            "horas": r["horas_trabalhadas"],
-            "valor_hora": r["valor_hora"] if mostrar_valores else None,
-        } for r in rows
-    })
+    rows = todos("SELECT funcionario_id, horas_trabalhadas FROM horas WHERE dia_id = ?", (dia_id,))
+    return jsonify({str(r["funcionario_id"]): {"horas": r["horas_trabalhadas"]} for r in rows})
 
 
 @bp.put("/dias/<int:dia_id>/horas")
@@ -179,17 +115,17 @@ def salvar_horas(dia_id: int):
         if funcionario_id not in validos:
             continue
         horas = numero(reg.get("horas"), 0, 0, 24, "as horas")
-        valor_hora = um("SELECT valor_hora FROM funcionarios WHERE id = ?", (funcionario_id,))["valor_hora"]
         if horas <= 0:
             db.execute("DELETE FROM horas WHERE dia_id = ? AND funcionario_id = ?", (dia_id, funcionario_id))
             continue
+        # Ponto novo entra com valor/hora zero (só presença); o de um dia
+        # antigo mantém o valor gravado na época.
         db.execute(
             """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora)
-               VALUES (?, ?, ?, ?)
+               VALUES (?, ?, ?, 0)
                ON CONFLICT(dia_id, funcionario_id)
-               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas,
-                             valor_hora = excluded.valor_hora""",
-            (dia_id, funcionario_id, horas, valor_hora),
+               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas""",
+            (dia_id, funcionario_id, horas),
         )
         total += horas
     db.commit()
@@ -222,7 +158,7 @@ def repetir_ponto(dia_id: int):
         raise ApiErro("Não há nenhum ponto anterior para copiar.", 404)
 
     origem = todos(
-        """SELECT h.funcionario_id, h.horas_trabalhadas, f.valor_hora
+        """SELECT h.funcionario_id, h.horas_trabalhadas
              FROM horas h JOIN funcionarios f ON f.id = h.funcionario_id
             WHERE h.dia_id = ? AND f.ativo = 1""", (referencia["dia_id"],))
     if not origem:
@@ -232,11 +168,10 @@ def repetir_ponto(dia_id: int):
     for r in origem:
         db.execute(
             """INSERT INTO horas (dia_id, funcionario_id, horas_trabalhadas, valor_hora)
-               VALUES (?, ?, ?, ?)
+               VALUES (?, ?, ?, 0)
                ON CONFLICT(dia_id, funcionario_id)
-               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas,
-                             valor_hora = excluded.valor_hora""",
-            (dia_id, r["funcionario_id"], r["horas_trabalhadas"], r["valor_hora"]),
+               DO UPDATE SET horas_trabalhadas = excluded.horas_trabalhadas""",
+            (dia_id, r["funcionario_id"], r["horas_trabalhadas"]),
         )
     db.commit()
     registrar_auditoria(usuario, "repetiu_ponto", "dia", dia_id, f"{len(origem)} registro(s)")

@@ -17,9 +17,6 @@ export function esc(valor) {
 
 export const DIAS_SEMANA = ['Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado', 'Domingo'];
 
-export const CLIMAS = ['☀️ Limpo', '⛅ Parcialmente nublado', '☁️ Nublado',
-  '🌦️ Chuva leve', '⛈️ Chuva c/ paralisação', '🌡️ Calor extremo'];
-
 // ---------------------------------------------------------------- formatação
 
 export function moeda(v) {

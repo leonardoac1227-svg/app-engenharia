@@ -21,14 +21,12 @@ import * as viewEquipe from './views/equipe.js';
 import * as viewFechamento from './views/fechamento.js';
 import * as viewFinanceiro from './views/financeiro.js';
 import * as viewHome from './views/home.js';
-import * as viewTerceirizados from './views/terceirizados.js';
 
 const VIEWS = {
   home: { el: '#viewHome', modulo: viewHome, titulo: 'PAINEL' },
-  diario: { el: '#viewDiario', modulo: viewDiario, titulo: 'DIÁRIO DE CANTEIRO' },
+  diario: { el: '#viewDiario', modulo: viewDiario, titulo: 'DIÁRIO' },
   equipe: { el: '#viewEquipe', modulo: viewEquipe, titulo: 'EQUIPE' },
   financeiro: { el: '#viewFinanceiro', modulo: viewFinanceiro, titulo: 'CAIXA' },
-  terceirizados: { el: '#viewTerceirizados', modulo: viewTerceirizados, titulo: 'TERCEIRIZADOS' },
   fechamento: { el: '#viewFechamento', modulo: viewFechamento, titulo: 'FECHAMENTO' },
   ajustes: { el: '#viewAjustes', modulo: viewAjustes, titulo: 'AJUSTES' },
 };
@@ -105,9 +103,7 @@ function abrirAcoesRapidas() {
   const dia = estado.dias.find((d) => d.hoje) || estado.diaAtivo || estado.dias[0];
 
   const acoes = [
-    { ico: '✎', titulo: 'Registrar o dia', sub: 'produção, clima e observações',
-      fn: () => navegar('diario') },
-    { ico: '📷', titulo: 'Foto do canteiro', sub: 'anexa ao RDO de hoje',
+    { ico: '📷', titulo: 'Foto do andamento', sub: 'anexa ao diário de hoje',
       fn: () => navegar('diario') },
     { ico: '⏱', titulo: 'Ponto da equipe', sub: 'horas trabalhadas de hoje',
       fn: () => navegar('diario') },
@@ -146,7 +142,6 @@ function abrirAcoesRapidas() {
 
 function ajustarPermissoes() {
   $('.tabbar-btn[data-aba=financeiro]').classList.toggle('hidden', !podeFinanceiro());
-  $('.tabbar-btn[data-aba=terceirizados]').classList.toggle('hidden', !podeFinanceiro());
   $('.tabbar-btn[data-aba=equipe]').classList.toggle('hidden', estado.usuario.papel === 'cliente');
   $('#drawerFoot').classList.toggle('hidden', !podeAdministrar());
 }
@@ -154,7 +149,8 @@ function ajustarPermissoes() {
 // ---------------------------------------------------------------- dados
 
 async function carregarObras({ manterSelecao = true } = {}) {
-  estado.obras = await api.get(`/api/obras${estado.mostrarArquivadas ? '?arquivadas=1' : ''}`);
+  estado.obras = await api.get(
+    `/api/obras${estado.mostrarArquivadas ? '?arquivadas=1' : ''}`, { semCache: true });
   renderizarDrawer();
 
   if (!estado.obras.length) {
@@ -200,32 +196,39 @@ async function selecionarObra(obraId, { renderizar = true } = {}) {
   $('#topbarTitulo').textContent = estado.obra?.nome || 'Obra ERP';
   renderizarDrawer();
 
-  const [funcionarios, etapas, semanas] = await Promise.all([
-    api.get(`/api/obras/${obraId}/funcionarios`),
-    api.get(`/api/obras/${obraId}/etapas`),
-    api.get(`/api/obras/${obraId}/semanas`),
-  ]);
-  estado.funcionarios = funcionarios;
-  estado.etapas = etapas;
-  estado.semanas = semanas;
-
-  const atual = semanas.find((s) => s.atual) || semanas[semanas.length - 1];
-  estado.semanaId = atual?.id || null;
-  estado.semana = atual || null;
-  estado.dias = estado.semanaId ? await api.get(`/api/semanas/${estado.semanaId}/dias`) : [];
+  // Uma requisição em vez de três: funcionários, semanas e os dias
+  // da semana atual vêm juntos. O servidor não trabalha menos, mas o aparelho
+  // deixa de esperar várias viagens de rede em fila.
+  aplicarContexto(await api.get(`/api/obras/${obraId}/contexto`, { semCache: true }));
 
   if (renderizar) await renderizarAtual();
 }
 
+/** Copia para o estado o pacote devolvido por /api/inicio e /contexto. */
+function aplicarContexto(contexto) {
+  if (!contexto) {
+    estado.funcionarios = []; estado.semanas = [];
+    estado.semanaId = null; estado.semana = null; estado.dias = [];
+    return;
+  }
+  estado.funcionarios = contexto.funcionarios || [];
+  estado.semanas = contexto.semanas || [];
+  estado.semanaId = contexto.semana_id || null;
+  estado.semana = estado.semanas.find((s) => s.id === estado.semanaId) || null;
+  estado.dias = contexto.dias || [];
+  if (contexto.obra) estado.obra = { ...estado.obra, ...contexto.obra };
+}
+
 async function recarregarSemana({ manterDia = false, recarregarLista = false } = {}) {
   if (recarregarLista) {
-    estado.semanas = await api.get(`/api/obras/${estado.obraId}/semanas`);
+    estado.semanas = await api.get(`/api/obras/${estado.obraId}/semanas`, { semCache: true });
     if (!estado.semanas.some((s) => s.id === estado.semanaId)) {
       estado.semanaId = estado.semanas[estado.semanas.length - 1]?.id || null;
     }
   }
   estado.semana = estado.semanas.find((s) => s.id === estado.semanaId) || null;
-  estado.dias = estado.semanaId ? await api.get(`/api/semanas/${estado.semanaId}/dias`) : [];
+  estado.dias = estado.semanaId
+    ? await api.get(`/api/semanas/${estado.semanaId}/dias`, { semCache: true }) : [];
   if (!manterDia) estado.diaAtivo = null;
   await renderizarAtual();
 }
@@ -253,23 +256,36 @@ const fecharDrawer = () => {
 // ---------------------------------------------------------------- boot
 
 async function iniciar() {
-  const sessao = await api.get('/api/sessao', { silencioso: true });
-  if (!sessao.autenticado) { window.location.href = '/login'; return; }
+  // Abertura em uma requisição: sessão, obras e o contexto da última obra
+  // usada. Eram sete idas ao servidor, quatro delas em fila.
+  const preferida = obraPreferida();
+  const inicio = await api.get(
+    `/api/inicio${preferida ? `?obra=${preferida}` : ''}`, { silencioso: true });
 
-  estado.usuario = sessao.usuario;
-  estado.versao = sessao.versao || '';
-  definirCsrf(sessao.csrf);
-  $('#btnPerfil').textContent = iniciais(sessao.usuario.nome);
+  if (!inicio.autenticado) { window.location.href = '/login'; return; }
+
+  estado.usuario = inicio.usuario;
+  estado.versao = inicio.versao || '';
+  definirCsrf(inicio.csrf);
+  $('#btnPerfil').textContent = iniciais(inicio.usuario.nome);
   ajustarPermissoes();
 
-  await carregarObras();
+  estado.obras = inicio.obras || [];
+  if (inicio.contexto) {
+    estado.obraId = inicio.contexto.obra_id;
+    estado.obra = estado.obras.find((o) => o.id === estado.obraId) || null;
+    salvarObraPreferida(estado.obraId);
+    aplicarContexto(inicio.contexto);
+    $('#topbarTitulo').textContent = estado.obra?.nome || 'Obra ERP';
+  }
+  renderizarDrawer();
 
   const abaInicial = VIEWS[abaPreferida()] ? abaPreferida() : 'home';
-  const restritas = ['financeiro', 'terceirizados'];
+  const restritas = ['financeiro'];
   const abaSegura = (!podeFinanceiro() && restritas.includes(abaInicial)) ? 'home' : abaInicial;
   await navegar(abaSegura, { forcar: true });
 
-  if (sessao.usuario.senha_provisoria) {
+  if (inicio.usuario.senha_provisoria) {
     toast('Você ainda usa a senha provisória — troque em Ajustes.', 'erro');
   }
 }

@@ -264,9 +264,7 @@ class _Aba:
 ROTULO_STATUS = {"Em Aberto": "A PAGAR", "Reembolso": "REEMBOLSO", "Pago": "PAGO"}
 
 
-def _itens_de_despesas(despesas: list[dict], status_alvo: str,
-                       ignorar: set[int] | None = None) -> list[dict]:
-    ignorar = ignorar or set()
+def _itens_de_despesas(despesas: list[dict], status_alvo: str) -> list[dict]:
     return [{
         "fornecedor": d.get("fornecedor") or d.get("categoria") or "-",
         "descricao": d.get("descricao") or "",
@@ -275,42 +273,12 @@ def _itens_de_despesas(despesas: list[dict], status_alvo: str,
         "valor": d.get("valor") or 0,
         "status": ROTULO_STATUS.get(d.get("status_pagamento"), ""),
     } for d in despesas
-      if d.get("status_pagamento") == status_alvo and d.get("id") not in ignorar]
-
-
-def _despesas_espelho(dados: dict) -> set[int]:
-    return {m["despesa_id"] for m in (dados.get("terceirizados") or []) if m.get("despesa_id")}
-
-
-def _secoes_de_medicao(dados: dict) -> list[tuple[str, list[dict]]]:
-    secoes = []
-    medicoes = sorted(dados.get("terceirizados") or [],
-                      key=lambda m: ((m.get("servico") or "").upper(), (m.get("empresa") or "").upper()))
-    for medicao in medicoes:
-        titulo = f"MEDIÇÃO {(medicao.get('servico') or 'SERVIÇO').upper()}"
-        
-        # Protegido com _safe_float
-        perc = _safe_float(medicao.get("percentual"))
-        acum = _safe_float(medicao.get("acumulado"))
-        
-        descricao = f"{perc:g}% medidos nesta semana · acumulado {acum:g}% de 100%"
-        if medicao.get("observacao"):
-            descricao += f"\n{medicao['observacao']}"
-        if not medicao.get("entra_no_caixa"):
-            descricao += "\n(não entra no pagamento desta semana)"
-
-        secoes.append((titulo, [{
-            "fornecedor": medicao.get("empresa") or "-",
-            "descricao": descricao,
-            "data": dados.get("data_fim"),
-            "documento": f"MED{medicao.get('numero_medicao', '')}" if medicao.get("numero_medicao") else "MED",
-            "valor": medicao.get("valor") or 0,
-            "status": "A PAGAR" if medicao.get("entra_no_caixa") else "NÃO ENTRA",
-        }]))
-    return secoes
+      if d.get("status_pagamento") == status_alvo]
 
 
 def _itens_de_folha(dados: dict) -> list[dict]:
+    """Folha calculada pelo ponto — só existe em semanas antigas, de quando o
+    profissional tinha valor/hora. Ponto de presença (valor zero) fica de fora."""
     return [{
         "fornecedor": p.get("nome") or "-",
         "descricao": (f"{p.get('funcao') or 'mão de obra'} · "
@@ -319,7 +287,7 @@ def _itens_de_folha(dados: dict) -> list[dict]:
         "documento": "FOLHA",
         "valor": p.get("total") or 0,
         "status": "A PAGAR",
-    } for p in (dados.get("folha_detalhada") or [])]
+    } for p in (dados.get("folha_detalhada") or []) if _safe_float(p.get("total")) > 0]
 
 
 def montar_aba(planilha, obra: dict, dados: dict) -> None:
@@ -329,22 +297,16 @@ def montar_aba(planilha, obra: dict, dados: dict) -> None:
     despesas = dados.get("despesas") or []
     semana = dados.get("semana_numero", 0)
 
-    espelhos = _despesas_espelho(dados)
-
     aba.secao(f" NOTAS PARA REEMBOLSO SEMANA {semana:02d}",
-              _itens_de_despesas(despesas, "Reembolso", espelhos))
+              _itens_de_despesas(despesas, "Reembolso"))
     aba.secao(f"NOTAS ABERTAS A PAGAR {aba.sigla}",
-              _itens_de_despesas(despesas, "Em Aberto", espelhos))
-
-    for titulo, itens in _secoes_de_medicao(dados):
-        aba.secao(titulo, itens, cor=ROSA_MEDICAO,
-                  entra_no_total=any(i["status"] == "A PAGAR" for i in itens))
+              _itens_de_despesas(despesas, "Em Aberto"))
 
     folha = _itens_de_folha(dados)
     if folha:
         aba.secao(f"FOLHA DE MÃO DE OBRA - SEMANA {semana:02d}", folha, cor=ROSA_MEDICAO)
 
-    pagas = _itens_de_despesas(despesas, "Pago", espelhos)
+    pagas = _itens_de_despesas(despesas, "Pago")
     if pagas:
         aba.secao(f"NOTAS JÁ PAGAS NA SEMANA {semana:02d} (fora do total)", pagas,
                   entra_no_total=False)

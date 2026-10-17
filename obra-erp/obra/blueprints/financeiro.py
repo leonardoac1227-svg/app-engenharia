@@ -104,9 +104,8 @@ def listar(dia_id: int):
     rows = todos(
         """SELECT x.id, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
                   x.numero_nota, x.grupo_parcela, x.grupo_tipo, x.parcela_numero, x.parcela_total,
-                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo, x.etapa_id,
-                  e.nome AS etapa_nome
-             FROM despesas x LEFT JOIN etapas e ON e.id = x.etapa_id
+                  x.vencimento, x.pago_em, x.imagem_path, x.nome_arquivo
+             FROM despesas x
             WHERE x.dia_id = ? ORDER BY x.id DESC""", (dia_id,))
     return jsonify([_serializar(r) for r in rows])
 
@@ -123,12 +122,6 @@ def criar(dia_id: int):
     if status not in STATUS_PAGAMENTO:
         raise ApiErro("Status de pagamento inválido.")
 
-    etapa_id = request.form.get("etapa_id") or None
-    if etapa_id:
-        etapa = um("SELECT obra_id FROM etapas WHERE id = ?", (etapa_id,))
-        if not etapa or etapa["obra_id"] != obra_id:
-            raise ApiErro("Etapa inválida para esta obra.")
-
     vencimento = data_iso(request.form.get("vencimento"), None, "vencimento")
     pago_em = hoje_iso() if status == "Pago" else None
 
@@ -140,11 +133,11 @@ def criar(dia_id: int):
     meta = salvar_anexo(request.files.get("imagem") or request.files.get("anexo"))
 
     cur = executar(
-        """INSERT INTO despesas (dia_id, etapa_id, categoria, descricao, fornecedor, valor,
+        """INSERT INTO despesas (dia_id, categoria, descricao, fornecedor, valor,
                                  status_pagamento, numero_nota, vencimento, pago_em, imagem_path,
                                  nome_arquivo, criado_por, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-        (dia_id, etapa_id or None, categoria, descricao,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (dia_id, categoria, descricao,
          fornecedor, valor, status, numero_nota, vencimento, pago_em,
          meta["arquivo"] if meta else "", meta["nome_original"] if meta else "",
          usuario["id"], agora_iso()),
@@ -178,7 +171,6 @@ def criar(dia_id: int):
         locacao_id = criar_locacao(obra_id, {
             "equipamento": request.form.get("equipamento") or descricao,
             "fornecedor": request.form.get("fornecedor"),
-            "etapa_id": etapa_id or None,
             "valor_parcela": valor,
             "frequencia": request.form.get("frequencia"),
             "ciclos": request.form.get("ciclos"),
@@ -208,8 +200,6 @@ def atualizar(despesa_id: int):
         campos.append("valor = ?"); valores.append(numero(dados["valor"], 0, 0.01, campo="o valor"))
     if "vencimento" in dados:
         campos.append("vencimento = ?"); valores.append(data_iso(dados["vencimento"], None, "vencimento"))
-    if "etapa_id" in dados:
-        campos.append("etapa_id = ?"); valores.append(dados["etapa_id"] or None)
     if "status_pagamento" in dados:
         status = texto(dados["status_pagamento"], 20)
         if status not in STATUS_PAGAMENTO:

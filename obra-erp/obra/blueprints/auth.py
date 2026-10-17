@@ -4,13 +4,20 @@
 from __future__ import annotations
 
 from flask import Blueprint, jsonify, request, session
+import secrets
+
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from ..config import PAPEIS
 from ..db import executar, registrar_auditoria, todos, um
 from ..security import (bloqueado, iniciar_sessao, limpar_tentativas, login_obrigatorio,
-                        papel_obrigatorio, registrar_tentativa, token_csrf, usuario_atual)
+                        origem_da_requisicao, papel_obrigatorio, registrar_tentativa,
+                        token_csrf, usuario_atual)
 from ..utils import ApiErro, agora_iso, texto
+
+# Hash de uma senha que ninguém usa, só para dar trabalho equivalente ao
+# verificar login de e-mail inexistente. Gerado uma vez, no import.
+HASH_DESCARTAVEL = generate_password_hash("conta-inexistente-" + secrets.token_hex(8))
 
 bp = Blueprint("auth", __name__, url_prefix="/api")
 
@@ -42,20 +49,29 @@ def sessao():
 
 @bp.post("/auth/login")
 def login():
-    ip = request.headers.get("X-Forwarded-For", request.remote_addr or "?").split(",")[0].strip()
-    if bloqueado(ip):
-        raise ApiErro("Muitas tentativas. Aguarde alguns minutos e tente novamente.", 429)
-
+    origem = origem_da_requisicao()
     dados = request.get_json(silent=True) or {}
     email = texto(dados.get("email"), 160).lower()
     senha = str(dados.get("senha") or "")
 
+    if bloqueado(origem, email):
+        raise ApiErro("Muitas tentativas. Aguarde alguns minutos e tente novamente.", 429)
+
     row = um("SELECT * FROM usuarios WHERE email = ? COLLATE NOCASE", (email,))
-    if not row or not row["ativo"] or not check_password_hash(row["senha_hash"], senha):
-        registrar_tentativa(ip)
+
+    # A verificação roda mesmo quando o e-mail não existe, contra um hash
+    # descartável. Sem isso, a resposta para e-mail inexistente voltava em
+    # décimos de milissegundo e a de e-mail válido levava dezenas — diferença
+    # suficiente para alguém mapear, por tempo de resposta, quem tem conta no
+    # sistema antes de tentar qualquer senha.
+    hash_alvo = row["senha_hash"] if row else HASH_DESCARTAVEL
+    senha_confere = check_password_hash(hash_alvo, senha)
+
+    if not row or not row["ativo"] or not senha_confere:
+        registrar_tentativa(origem, email)
         raise ApiErro("E-mail ou senha incorretos.", 401, "credenciais")
 
-    limpar_tentativas(ip)
+    limpar_tentativas(origem, email)
     iniciar_sessao(row)
     executar("UPDATE usuarios SET ultimo_acesso = ? WHERE id = ?", (agora_iso(), row["id"]))
     registrar_auditoria(dict(row), "login", "usuario", row["id"])

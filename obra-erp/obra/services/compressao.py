@@ -41,6 +41,12 @@ LARGURA_MINIMA_PARA_REDUZIR = 1000  # abaixo disso, mexer só piora
 try:
     from PIL import Image, ImageOps
     PIL_OK = True
+
+    # Teto contra "bomba de descompressão": um PNG de poucos KB pode declarar
+    # 60.000 × 60.000 pixels e consumir gigabytes ao ser aberto, derrubando o
+    # processo. 40 MP cobre com folga qualquer celular (um iPhone tira 12 MP)
+    # e recusa o resto.
+    Image.MAX_IMAGE_PIXELS = 40_000_000
 except ImportError:  # pragma: no cover
     PIL_OK = False
 

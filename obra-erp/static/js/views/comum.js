@@ -57,8 +57,6 @@ export function ligarBarraSemana(raiz) {
         descricao: 'A semana vai de segunda a domingo a partir da data escolhida.',
         campos: [
           { nome: 'data_inicio', rotulo: 'Início (segunda-feira)', tipo: 'date', valor: sugestao },
-          { nome: 'orcamento_previsto', rotulo: 'Orçamento previsto da semana (R$)', tipo: 'number', valor: ultima?.orcamento_previsto || '' },
-          { nome: 'meta', rotulo: 'Meta da semana', tipo: 'textarea', placeholder: 'Ex: concluir alvenaria do 2º pavimento' },
         ],
       });
       if (!dados) return;
@@ -77,11 +75,10 @@ function proximaSegunda() {
   return new Date(hoje.getTime() + diff * 86400000).toLocaleDateString('sv-SE');
 }
 
-/** Faixa de dias com marcas de RDO / ponto / caixa / foto e alerta de pendência. */
+/** Faixa de dias com marcas de ponto / caixa / foto e alerta de pendência. */
 export function htmlDiasStrip(diaAtivoId) {
   return `<div class="dias-strip">${estado.dias.map((d) => {
     const marcas = [
-      d.tem_rdo ? '<span class="marca rdo"></span>' : '',
       d.tem_ponto ? '<span class="marca ponto"></span>' : '',
       d.qtd_despesas ? '<span class="marca caixa"></span>' : '',
       d.fotos ? '<span class="marca foto"></span>' : '',

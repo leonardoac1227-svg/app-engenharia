@@ -14,7 +14,7 @@
    cache, muda o sw.js em bytes e força a atualização.
    ========================================================================== */
 
-const VERSAO = 16;
+const VERSAO = 18;
 const CACHE = `obra-erp-v${VERSAO}`;
 
 const ESTATICOS = [
@@ -31,7 +31,6 @@ const ESTATICOS = [
   '/static/js/views/financeiro.js',
   '/static/js/views/fechamento.js',
   '/static/js/views/ajustes.js',
-  '/static/js/views/terceirizados.js',
   '/static/js/views/comum.js',
   '/static/img/icone.svg',
 ];
@@ -59,6 +58,25 @@ self.addEventListener('fetch', (evento) => {
 
   // Dados da obra e anexos nunca saem do cache: valor errado é pior que erro.
   if (url.pathname.startsWith('/api') || url.pathname.startsWith('/arquivos')) return;
+
+  // Estático com ?v=<versão> nunca muda de conteúdo: pode vir do cache na
+  // hora, sem tocar a rede. Quando sai uma versão nova, a URL muda junto e o
+  // arquivo antigo simplesmente deixa de ser pedido.
+  const imutavel = url.pathname.startsWith('/static') && url.searchParams.has('v');
+
+  if (imutavel) {
+    evento.respondWith(
+      caches.match(evento.request).then((cacheado) => cacheado || fetch(evento.request)
+        .then((resposta) => {
+          if (resposta.ok) {
+            const copia = resposta.clone();
+            caches.open(CACHE).then((cache) => cache.put(evento.request, copia));
+          }
+          return resposta;
+        }))
+    );
+    return;
+  }
 
   evento.respondWith(
     fetch(evento.request)

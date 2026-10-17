@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""Diário de obra: semanas, RDO diário, fotos, medições e assinatura digital."""
+"""Diário de obra: semanas, dias e fotos do andamento."""
 
 from __future__ import annotations
 
@@ -8,9 +8,8 @@ from flask import Blueprint, jsonify, request
 from ..db import executar, get_db, registrar_auditoria, todos, um
 from ..security import (exigir_financeiro, exigir_lancamento, garantir_acesso_obra,
                         login_obrigatorio, obra_da_foto,
-                        obra_da_meta, obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
+                        obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
 from ..services.fechamento import garantir_dias, listar_dias
-from ..services.metas import arrastar_metas, criar_meta, listar_metas, registrar_progresso
 from ..utils import (ApiErro, formatar_bytes, agora_iso, data_iso, hoje_iso, numero, remover_anexo, salvar_anexo,
                      segunda_da_semana, somar_dias, texto)
 
@@ -77,20 +76,8 @@ def criar_semana(obra_id: int):
     semana_nova = cur.lastrowid
     garantir_dias(semana_nova)
 
-    # Metas não concluídas da semana anterior vêm junto, com o contador de
-    # arrasto somado. É automático de propósito: meta que "some" na virada da
-    # semana é meta que ninguém cobra.
-    arrastadas = 0
-    if ultima:
-        anterior = um("SELECT id FROM semanas WHERE obra_id = ? AND numero = ?",
-                      (obra_id, ultima["numero"]))
-        if anterior:
-            arrastadas = arrastar_metas(obra_id, anterior["id"], semana_nova)
-
-    registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova,
-                        f"Semana {numero_novo}" + (f" · {arrastadas} meta(s) arrastada(s)" if arrastadas else ""))
-    return jsonify({"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
-                    "metas_arrastadas": arrastadas}), 201
+    registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova, f"Semana {numero_novo}")
+    return jsonify({"id": semana_nova, "numero": numero_novo, "data_inicio": inicio}), 201
 
 
 @bp.put("/semanas/<int:semana_id>")
@@ -143,7 +130,7 @@ def remover_semana(semana_id: int):
     return jsonify({"ok": True})
 
 
-# ---------------------------------------------------------------- dias / RDO
+# ---------------------------------------------------------------- dias
 
 @bp.get("/semanas/<int:semana_id>/dias")
 @login_obrigatorio
@@ -170,47 +157,6 @@ def detalhar_dia(dia_id: int):
                        (dia_id,))
     ]
     return jsonify(dia)
-
-
-@bp.put("/dias/<int:dia_id>")
-@login_obrigatorio
-def salvar_rdo(dia_id: int):
-    obra_do_dia(dia_id)
-    usuario = exigir_lancamento()
-    dados = request.get_json(silent=True) or {}
-    executar(
-        """UPDATE dias SET producao_dia = ?, clima = ?, observacoes = ?, atualizado_em = ?
-            WHERE id = ?""",
-        (texto(dados.get("producao_dia"), 4000), texto(dados.get("clima"), 60),
-         texto(dados.get("observacoes"), 2000), agora_iso(), dia_id),
-    )
-    registrar_auditoria(usuario, "salvou_rdo", "dia", dia_id)
-    return jsonify({"ok": True})
-
-
-@bp.post("/dias/<int:dia_id>/assinatura")
-@login_obrigatorio
-def assinar_dia(dia_id: int):
-    """Assinatura digital do RDO (carimbo de responsável + data/hora).
-
-    Cumpre o papel de "documento formal" citado pela Resolução CONFEA
-    1094/2017: quem assinou, quando, e sobre qual conteúdo.
-    """
-    obra_do_dia(dia_id)
-    usuario = exigir_lancamento()
-    dia = um("SELECT producao_dia, assinado_em FROM dias WHERE id = ?", (dia_id,))
-    if not (dia["producao_dia"] or "").strip():
-        raise ApiErro("Preencha a produção do dia antes de assinar o RDO.")
-
-    if request.args.get("remover") == "1":
-        executar("UPDATE dias SET assinado_por = '', assinado_em = NULL WHERE id = ?", (dia_id,))
-        return jsonify({"ok": True, "assinado": False})
-
-    carimbo = agora_iso()
-    executar("UPDATE dias SET assinado_por = ?, assinado_em = ? WHERE id = ?",
-             (usuario["nome"], carimbo, dia_id))
-    registrar_auditoria(usuario, "assinou_rdo", "dia", dia_id, carimbo)
-    return jsonify({"ok": True, "assinado": True, "assinado_por": usuario["nome"], "assinado_em": carimbo})
 
 
 @bp.get("/dias/<int:dia_id>/totais")
@@ -324,143 +270,6 @@ def galeria(obra_id: int):
             WHERE s.obra_id = ? AND f.ambiente <> '' ORDER BY f.ambiente""", (obra_id,))]
 
     return jsonify({"fotos": fotos, "ambientes": ambientes})
-
-
-# ---------------------------------------------------------------- medições
-
-@bp.get("/dias/<int:dia_id>/medicoes")
-@login_obrigatorio
-def listar_medicoes(dia_id: int):
-    obra_do_dia(dia_id)
-    rows = todos(
-        """SELECT m.id, m.descricao, m.quantidade, m.unidade, m.etapa_id, e.nome AS etapa_nome
-             FROM medicoes m LEFT JOIN etapas e ON e.id = m.etapa_id
-            WHERE m.dia_id = ? ORDER BY m.id""", (dia_id,))
-    return jsonify([dict(r) for r in rows])
-
-
-@bp.post("/dias/<int:dia_id>/medicoes")
-@login_obrigatorio
-def criar_medicao(dia_id: int):
-    obra_id = obra_do_dia(dia_id)
-    exigir_lancamento()
-    dados = request.get_json(silent=True) or {}
-
-    etapa_id = dados.get("etapa_id")
-    if etapa_id:
-        etapa = um("SELECT obra_id FROM etapas WHERE id = ?", (etapa_id,))
-        if not etapa or etapa["obra_id"] != obra_id:
-            raise ApiErro("Etapa inválida para esta obra.")
-
-    cur = executar(
-        """INSERT INTO medicoes (dia_id, etapa_id, descricao, quantidade, unidade, criado_em)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (dia_id, etapa_id or None, texto(dados.get("descricao"), 160, True, "o serviço medido"),
-         numero(dados.get("quantidade"), 0, 0, campo="a quantidade"),
-         texto(dados.get("unidade"), 12) or "m²", agora_iso()),
-    )
-    return jsonify({"id": cur.lastrowid}), 201
-
-
-@bp.delete("/medicoes/<int:medicao_id>")
-@login_obrigatorio
-def remover_medicao(medicao_id: int):
-    row = um("SELECT dia_id FROM medicoes WHERE id = ?", (medicao_id,))
-    if not row:
-        raise ApiErro("Medição não encontrada.", 404)
-    obra_do_dia(row["dia_id"])
-    exigir_lancamento()
-    executar("DELETE FROM medicoes WHERE id = ?", (medicao_id,))
-    return jsonify({"ok": True})
-
-
-# ---------------------------------------------------------------- metas
-
-@bp.get("/semanas/<int:semana_id>/metas")
-@login_obrigatorio
-def listar_metas_semana(semana_id: int):
-    obra_da_semana(semana_id)
-    return jsonify(listar_metas(semana_id, com_progresso=True))
-
-
-@bp.post("/semanas/<int:semana_id>/metas")
-@login_obrigatorio
-def criar_meta_semana(semana_id: int):
-    exigir_lancamento()
-    obra_id = obra_da_semana(semana_id)
-    dados = request.get_json(silent=True) or {}
-    meta_id = criar_meta(obra_id, semana_id, dados)
-    registrar_auditoria(usuario_atual(), "criou_meta", "meta", meta_id, texto(dados.get("nome"), 120))
-    return jsonify({"id": meta_id}), 201
-
-
-@bp.put("/metas/<int:meta_id>")
-@login_obrigatorio
-def atualizar_meta(meta_id: int):
-    exigir_lancamento()
-    obra_da_meta(meta_id)
-    dados = request.get_json(silent=True) or {}
-    atual = um("SELECT * FROM metas WHERE id = ?", (meta_id,))
-
-    nome = texto(dados.get("nome"), 200) or atual["nome"]
-    percentual = numero(dados.get("percentual"), atual["percentual"], 0, 100, campo="o percentual")
-    concluida = 1 if percentual >= 100 else 0
-
-    executar(
-        """UPDATE metas SET nome = ?, descricao = ?, percentual = ?, etapa_id = ?,
-                            concluida = ?, concluida_em = ?, atualizado_em = ?
-            WHERE id = ?""",
-        (nome, texto(dados.get("descricao"), 400), percentual,
-         dados.get("etapa_id") or None, concluida,
-         atual["concluida_em"] or (hoje_iso() if concluida else None), agora_iso(), meta_id))
-    registrar_auditoria(usuario_atual(), "editou_meta", "meta", meta_id, nome)
-    return jsonify({"ok": True})
-
-
-@bp.delete("/metas/<int:meta_id>")
-@login_obrigatorio
-def remover_meta(meta_id: int):
-    exigir_lancamento()
-    obra_da_meta(meta_id)
-    meta = um("SELECT nome FROM metas WHERE id = ?", (meta_id,))
-    executar("DELETE FROM metas WHERE id = ?", (meta_id,))
-    registrar_auditoria(usuario_atual(), "removeu_meta", "meta", meta_id, meta["nome"] if meta else "")
-    return jsonify({"ok": True})
-
-
-@bp.get("/dias/<int:dia_id>/metas")
-@login_obrigatorio
-def metas_do_dia(dia_id: int):
-    """Metas da semana com a marcação daquele dia — é a tela do canteiro."""
-    obra_do_dia(dia_id)
-    dia = um("SELECT semana_id FROM dias WHERE id = ?", (dia_id,))
-    metas = listar_metas(dia["semana_id"], com_progresso=False)
-
-    marcacoes = {
-        linha["meta_id"]: dict(linha)
-        for linha in todos(
-            "SELECT meta_id, percentual, observacao FROM meta_progresso WHERE dia_id = ?", (dia_id,))
-    }
-    for meta in metas:
-        marcado = marcacoes.get(meta["id"])
-        meta["marcado_hoje"] = marcado is not None
-        meta["percentual_dia"] = round(float(marcado["percentual"]), 1) if marcado else meta["percentual"]
-        meta["observacao_dia"] = marcado["observacao"] if marcado else ""
-    return jsonify(metas)
-
-
-@bp.post("/dias/<int:dia_id>/metas/<int:meta_id>/progresso")
-@login_obrigatorio
-def progresso_meta(dia_id: int, meta_id: int):
-    exigir_lancamento()
-    obra_do_dia(dia_id)
-    obra_da_meta(meta_id)
-    dados = request.get_json(silent=True) or {}
-    usuario = usuario_atual() or {}
-    meta = registrar_progresso(meta_id, dia_id, dados, usuario.get("nome", ""))
-    registrar_auditoria(usuario, "atualizou_meta", "meta", meta_id,
-                        f"{meta['nome']} → {meta['percentual']:g}%")
-    return jsonify(meta)
 
 
 # ---------------------------------------------------------------- folha da semana

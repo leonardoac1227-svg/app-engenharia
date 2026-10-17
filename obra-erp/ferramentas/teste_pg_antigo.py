@@ -6,7 +6,16 @@ colunas adicionadas depois. Antes da correção, a migração só criava tabelas
 novas e o app quebrava com "column ... does not exist".
 """
 import os, sqlite3, sys
-sys.path.insert(0, '/tmp')
+import os
+import sys
+import tempfile
+
+# Caminho do projeto derivado da posição deste arquivo: assim a suíte roda em
+# qualquer clone, sem depender de onde a pasta foi colocada.
+RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, RAIZ)
+sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
+
 import psycopg_falso
 BANCO = '/tmp/pg_antigo.db'
 psycopg_falso.instalar(BANCO)
@@ -80,8 +89,7 @@ ok('numero_nota' not in colunas_antes, 'banco começa SEM a coluna numero_nota (
 
 # --- 2. sobe o app novo sobre esse banco ---
 os.environ['DATABASE_URL'] = 'postgresql://x:y@db.projeto.supabase.co:5432/postgres'
-os.environ['DATA_DIR'] = '/tmp/pg_antigo_dados'
-sys.path.insert(0, '/home/claude/obra-erp')
+os.environ.setdefault("DATA_DIR", tempfile.mkdtemp(prefix="obra-teste-"))
 from obra import create_app
 app = create_app()
 c2 = app.test_client()
@@ -111,11 +119,8 @@ ok(r.status_code == 200, 'painel financeiro funciona', r.status_code)
 r = c2.get('/api/obras/1/dashboard')
 ok(r.status_code == 200, 'dashboard funciona', r.status_code)
 r = c2.get('/api/obras/1/funcionarios')
-ok(r.status_code == 200 and r.get_json()[0]['tipo_contrato'] == 'fixo',
-   'funcionário antigo vira contrato fixo', r.get_json()[0] if r.status_code == 200 else r.status_code)
-r = c2.get('/api/obras/1/terceirizados')
-ok(r.status_code == 200 and r.get_json()['contratos'][0]['tipo'] == 'empresa',
-   'contrato antigo vira empresa', r.status_code)
+ok(r.status_code == 200 and r.get_json()[0]['nome'] == 'Zé',
+   'funcionário antigo continua na equipe', r.get_json()[0] if r.status_code == 200 else r.status_code)
 
 r = c2.post('/api/dias/1/despesas', data={'categoria':'Material','descricao':'Nova com nota',
     'valor':'100','status_pagamento':'Pago','numero_nota':'55555'},
