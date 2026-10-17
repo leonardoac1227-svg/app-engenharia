@@ -96,7 +96,8 @@ def adicionar(despesa_id: int, arquivos) -> list[dict]:
 
 def _ainda_em_uso(arquivo: str) -> bool:
     return bool(um("SELECT 1 AS sim FROM despesa_anexos WHERE arquivo = ? LIMIT 1", (arquivo,))
-                or um("SELECT 1 AS sim FROM despesas WHERE imagem_path = ? LIMIT 1", (arquivo,)))
+                or um("SELECT 1 AS sim FROM despesas WHERE imagem_path = ? LIMIT 1", (arquivo,))
+                or um("SELECT 1 AS sim FROM fotos WHERE arquivo = ? LIMIT 1", (arquivo,)))
 
 
 def apagar_arquivos_orfaos(arquivos) -> None:

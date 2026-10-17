@@ -101,7 +101,7 @@ export function confirmar({ titulo, texto = '', confirmar: rotulo = 'Confirmar',
   return new Promise((resolve) => {
     abrirModal(`
       <h3>${esc(titulo)}</h3>
-      ${texto ? `<p class="muted small">${esc(texto)}</p>` : ''}
+      ${texto ? `<p class="muted small" style="white-space:pre-line">${esc(texto)}</p>` : ''}
       <div class="btn-linha">
         <button class="btn btn-outline" data-acao="cancelar">Cancelar</button>
         <button class="btn ${perigo ? 'btn-perigo' : 'btn-brass'}" data-acao="ok">${esc(rotulo)}</button>

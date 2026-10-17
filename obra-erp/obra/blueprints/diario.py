@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, jsonify, request
 
 from ..db import executar, get_db, registrar_auditoria, todos, um
@@ -11,6 +13,7 @@ from ..security import (exigir_financeiro, exigir_lancamento, garantir_acesso_ob
                         obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
 from ..services.fechamento import garantir_dias, listar_dias
 from ..services.parcelamento import alocar_parcelas_agendadas, sql_fora_da_semana
+from ..services.semanas import excluir_semana
 from ..utils import (ApiErro, formatar_bytes, agora_iso, data_iso, hoje_iso, numero, remover_anexo, salvar_anexo,
                      segunda_da_semana, somar_dias, texto)
 
@@ -30,6 +33,17 @@ def _relatorio_compressao(originais: int, finais: int) -> dict:
     }
 
 MAX_FOTOS_POR_ENVIO = 10
+
+
+def _segunda_feira(valor, padrao):
+    """Semana de obra vai de segunda a domingo: qualquer data vira a segunda dela.
+
+    Sem isso, uma semana começando num domingo deixava o dia chamado
+    "Segunda" com a data do domingo, e o diário inteiro ficava defasado.
+    Domingo pertence à semana que começou na segunda anterior.
+    """
+    escolhida = data_iso(valor, padrao, "início da semana")
+    return segunda_da_semana(date.fromisoformat(escolhida))
 
 
 # ---------------------------------------------------------------- semanas
@@ -62,7 +76,7 @@ def criar_semana(obra_id: int):
     numero_novo = (ultima["numero"] + 1) if ultima else 1
     # Por padrão a nova semana começa na segunda seguinte à última cadastrada.
     padrao = somar_dias(ultima["data_inicio"], 7) if (ultima and ultima["data_inicio"]) else segunda_da_semana()
-    inicio = data_iso(dados.get("data_inicio"), padrao)
+    inicio = _segunda_feira(dados.get("data_inicio"), padrao)
 
     if um("SELECT id FROM semanas WHERE obra_id = ? AND data_inicio = ?", (obra_id, inicio)):
         raise ApiErro("Já existe uma semana cadastrada começando nesta data.", 409)
@@ -112,7 +126,8 @@ def atualizar_semana(semana_id: int):
             campos.append("orcamento_previsto = ?")
             valores.append(numero(dados["orcamento_previsto"], 0, 0, campo="o orçamento previsto"))
         if "data_inicio" in dados:
-            campos.append("data_inicio = ?"); valores.append(data_iso(dados["data_inicio"], hoje_iso()))
+            campos.append("data_inicio = ?")
+            valores.append(_segunda_feira(dados["data_inicio"], segunda_da_semana()))
 
     if not campos:
         raise ApiErro("Nada para atualizar.")
@@ -132,9 +147,13 @@ def atualizar_semana(semana_id: int):
 @papel_obrigatorio("gestor")
 def remover_semana(semana_id: int):
     obra_da_semana(semana_id)
-    executar("DELETE FROM semanas WHERE id = ?", (semana_id,))
-    registrar_auditoria(usuario_atual(), "excluiu_semana", "semana", semana_id)
-    return jsonify({"ok": True})
+    semana = um("SELECT numero, data_inicio FROM semanas WHERE id = ?", (semana_id,))
+    resumo = excluir_semana(semana_id)
+    registrar_auditoria(
+        usuario_atual(), "excluiu_semana", "semana", semana_id,
+        f"Semana {semana['numero']} ({semana['data_inicio']}) · {resumo['despesas']} lançamento(s)"
+        f" · {resumo['fotos']} foto(s)")
+    return jsonify({"ok": True, **resumo})
 
 
 # ---------------------------------------------------------------- dias
