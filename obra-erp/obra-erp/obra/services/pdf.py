@@ -62,28 +62,22 @@ def _estilos() -> dict:
 class BarraProgresso(Flowable):
     """Barra previsto x realizado com semáforo (verde / amarelo / vermelho)."""
 
-    def __init__(self, percentual: float, largura: float, altura: float = 9,
-                 invertido: bool = False):
+    def __init__(self, percentual: float, largura: float, altura: float = 9):
         super().__init__()
         self.percentual = max(0.0, float(percentual or 0))
         self.width = largura
         self.height = altura
-        # invertido=True para metas: ali 100% é a meta cumprida, não estouro.
-        self.invertido = invertido
 
     def draw(self):
         c = self.canv
         c.setFillColor(CINZA_CLARO)
         c.roundRect(0, 0, self.width, self.height, 2, stroke=0, fill=1)
-        if self.invertido:
-            cor = VERDE if self.percentual >= 100 else (LATAO if self.percentual > 0 else CINZA_CLARO)
-        else:
-            cor = VERDE if self.percentual <= 85 else (AMBAR if self.percentual <= 100 else VERMELHO)
+        cor = VERDE if self.percentual <= 85 else (AMBAR if self.percentual <= 100 else VERMELHO)
         preenchido = min(self.percentual, 100) / 100 * self.width
         if preenchido > 0:
             c.setFillColor(cor)
             c.roundRect(0, 0, max(preenchido, 3), self.height, 2, stroke=0, fill=1)
-        if self.percentual > 100 and not self.invertido:  # estouro: marca vermelha no fim
+        if self.percentual > 100:  # estouro: marca vermelha no fim
             c.setFillColor(VERMELHO)
             c.rect(self.width - 3, 0, 3, self.height, stroke=0, fill=1)
 
@@ -133,91 +127,6 @@ def _kpi(rotulo: str, valor: str, estilos, cor=None):
         Paragraph(f'<font color="{(cor or GRAFITE).hexval()}">{escape(valor)}</font>', estilos["valor"]),
     ]
 
-
-
-def _bloco_metas(d, estilos):
-    """Quadro de metas com barra de progresso, arrasto e status.
-
-    Substitui o antigo campo de meta em texto livre. Se a obra ainda não usa
-    metas nomeadas, cai no texto antigo para não deixar o relatório mudo.
-    """
-    metas = d.get("metas") or []
-    if not metas:
-        texto_legado = d.get("meta") or ""
-        cor = VERDE if d.get("meta_atingida") else (VERMELHO if texto_legado else CINZA)
-        rotulo = ("META ATINGIDA" if d.get("meta_atingida")
-                  else ("META NÃO ATINGIDA" if texto_legado else "SEM META DEFINIDA"))
-        tabela = Table([[
-            Paragraph("META DA SEMANA", estilos["rotulo"]),
-            Paragraph(f'<font color="{cor.hexval()}"><b>{rotulo}</b></font>', estilos["celula_dir"]),
-        ], [
-            Paragraph(escape(texto_legado or "Nenhuma meta foi definida para esta semana."),
-                      estilos["corpo"]), "",
-        ]], colWidths=[LARGURA_UTIL * 0.6, LARGURA_UTIL * 0.4])
-        tabela.setStyle(TableStyle([
-            ("SPAN", (0, 1), (1, 1)),
-            ("BACKGROUND", (0, 0), (-1, -1), colors.HexColor("#FAF8F4")),
-            ("BOX", (0, 0), (-1, -1), 0.6, CINZA_CLARO),
-            ("LEFTPADDING", (0, 0), (-1, -1), 8), ("RIGHTPADDING", (0, 0), (-1, -1), 8),
-            ("TOPPADDING", (0, 0), (-1, -1), 6), ("BOTTOMPADDING", (0, 0), (-1, -1), 6),
-        ]))
-        return [tabela, Spacer(1, 9)]
-
-    resumo = d.get("metas_resumo") or {}
-    elementos = [Paragraph(
-        f"METAS DA SEMANA · {resumo.get('concluidas', 0)}/{resumo.get('total', 0)} CONCLUÍDAS",
-        estilos["secao"])]
-
-    linhas = [[
-        Paragraph("META", estilos["rotulo"]),
-        Paragraph("AVANÇO NA SEMANA", estilos["rotulo"]),
-        Paragraph("SITUAÇÃO", estilos["celula_dir"]),
-    ]]
-
-    for meta in metas:
-        nome = escape(meta["nome"])
-        if meta.get("semanas_arrastada"):
-            aviso = "ª semana arrastando"
-            nome += (f'<br/><font size="7" color="{VERMELHO.hexval()}">'
-                     f'{meta["semanas_arrastada"] + 1}{aviso}</font>')
-        elif meta.get("descricao"):
-            nome += f'<br/><font size="7" color="{CINZA.hexval()}">{escape(meta["descricao"])}</font>'
-
-        if meta["concluida"]:
-            cor, situacao = VERDE, "concluída"
-        elif meta.get("transferida"):
-            cor, situacao = VERMELHO, "vai para a próxima semana"
-        elif meta["percentual"] > 0:
-            cor, situacao = LATAO, "em andamento"
-        else:
-            cor, situacao = CINZA, "não iniciada"
-
-        avanco = meta["percentual"] - meta["percentual_inicial"]
-        legenda = f'{numero_br(meta["percentual_inicial"], 0)}% → {numero_br(meta["percentual"], 0)}%'
-        if avanco > 0:
-            legenda += f' (+{numero_br(avanco, 0)} p.p.)'
-        elif avanco == 0 and meta["percentual"] > 0:
-            legenda += " (sem avanço)"
-
-        linhas.append([
-            Paragraph(nome, estilos["celula"]),
-            [BarraProgresso(meta["percentual"], largura=LARGURA_UTIL * 0.30, invertido=True),
-             Paragraph(f'<font size="7" color="{CINZA.hexval()}">{legenda}</font>', estilos["celula"])],
-            Paragraph(f'<font color="{cor.hexval()}"><b>{situacao}</b></font>', estilos["celula_dir"]),
-        ])
-
-    tabela = Table(linhas, colWidths=[LARGURA_UTIL * 0.42, LARGURA_UTIL * 0.33, LARGURA_UTIL * 0.25],
-                   repeatRows=1)
-    tabela.setStyle(TableStyle([
-        ("BACKGROUND", (0, 0), (-1, 0), LATAO_CLARO),
-        ("LINEBELOW", (0, 0), (-1, -1), 0.4, CINZA_CLARO),
-        ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
-        ("LEFTPADDING", (0, 0), (-1, -1), 7), ("RIGHTPADDING", (0, 0), (-1, -1), 7),
-        ("TOPPADDING", (0, 0), (-1, -1), 5), ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
-    ]))
-
-    elementos += [tabela, Spacer(1, 9)]
-    return elementos
 
 
 def _tabela_kpis(itens: list, estilos, colunas: int = 4):
@@ -337,15 +246,12 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
         E.append(Paragraph(escape(d["obra"]["endereco"]), estilos["pequeno"]))
     E.append(Spacer(1, 9))
 
-    # ---- metas ----
-    E.extend(_bloco_metas(d, estilos))
-
     # ---- KPIs ----
     E.append(_tabela_kpis([
         ("Custo da semana", moeda(fin["custo_semana"]), GRAFITE),
-        ("Folha", moeda(fin["folha"]), GRAFITE),
-        ("Materiais e serviços", moeda(fin["despesas"]), GRAFITE),
+        ("Despesas", moeda(fin["despesas"]), GRAFITE),
         ("Horas lançadas", f"{numero_br(ind['total_horas'], 1)} h", GRAFITE),
+        ("Fotos", str(ind["total_fotos"]), GRAFITE),
     ], estilos))
     E.append(Spacer(1, 8))
 
@@ -371,76 +277,21 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
                 E.append(Paragraph(escape(paragrafo.strip()), estilos["corpo"]))
         E.append(Spacer(1, 4))
 
-    # ---- avanço físico ----
-    E.append(Paragraph("AVANÇO FÍSICO DIA A DIA", estilos["secao"]))
-    linhas = [["DIA", "DATA", "PRODUÇÃO REGISTRADA", "CLIMA", "EFETIVO"]]
-    for dia in d["dias"]:
-        if dia["dia_semana"] in ("Sábado", "Domingo") and not (dia["producao_dia"] or dia["horas"]):
-            continue
-        producao = dia["producao_dia"] or "<i>sem registro</i>"
-        if dia["observacoes"]:
-            producao += f'<br/><font color="{CINZA.hexval()}" size="7.5">Obs.: {escape(dia["observacoes"])}</font>'
-        if dia["assinado"]:
-            producao += f'<br/><font color="{VERDE.hexval()}" size="7">✓ assinado por {escape(dia["assinado_por"])}</font>'
-        linhas.append([
-            Paragraph(f"<b>{dia['dia_semana'][:3]}</b>", estilos["celula"]),
-            Paragraph(data_br(dia["data"]), estilos["celula"]),
-            Paragraph(producao if dia["producao_dia"] else
-                      f'<font color="{CINZA.hexval()}">sem registro de produção</font>', estilos["celula"]),
-            Paragraph(escape((dia["clima"] or "—").encode("ascii", "ignore").decode() or "—"), estilos["celula"]),
-            Paragraph(f"{numero_br(dia['efetivo'], 0)}", estilos["celula_dir"]),
-        ])
-    E.append(_tabela(linhas, [16 * mm, 20 * mm, LARGURA_UTIL - 82 * mm, 26 * mm, 20 * mm], estilos,
-                     alinhar_direita=(4,)))
-
-    # ---- medições ----
-    if d["medicoes"]:
-        E.append(Paragraph("MEDIÇÕES DE SERVIÇO", estilos["secao"]))
-        linhas = [["DIA", "SERVIÇO", "ETAPA", "QTD."]]
-        for m in d["medicoes"]:
+    # ---- equipe e fotos dia a dia ----
+    dias_com_registro = [dia for dia in d["dias"] if dia["horas"] or dia["fotos"]]
+    if dias_com_registro:
+        E.append(Paragraph("EQUIPE E FOTOS DIA A DIA", estilos["secao"]))
+        linhas = [["DIA", "DATA", "EFETIVO", "HORAS", "FOTOS"]]
+        for dia in dias_com_registro:
             linhas.append([
-                Paragraph(m["dia_semana"][:3], estilos["celula"]),
-                Paragraph(escape(m["descricao"]), estilos["celula"]),
-                Paragraph(escape(m["etapa_nome"] or "—"), estilos["celula"]),
-                Paragraph(f"{numero_br(m['quantidade'], 2)} {escape(m['unidade'])}", estilos["celula_dir"]),
+                Paragraph(f"<b>{dia['dia_semana'][:3]}</b>", estilos["celula"]),
+                Paragraph(data_br(dia["data"]), estilos["celula"]),
+                Paragraph(f"{numero_br(dia['efetivo'], 0)}", estilos["celula_dir"]),
+                Paragraph(f"{numero_br(dia['horas'], 1)}", estilos["celula_dir"]),
+                Paragraph(str(dia["fotos"]), estilos["celula_dir"]),
             ])
-        E.append(_tabela(linhas, [16 * mm, LARGURA_UTIL - 82 * mm, 36 * mm, 30 * mm], estilos,
-                         alinhar_direita=(3,)))
-
-    # ---- terceirizados ----
-    terceiros = d.get("terceirizados") or []
-    if terceiros and fin:
-        resumo_t = d.get("terceirizados_resumo") or {}
-        E.append(Paragraph("MEDIÇÃO DE TERCEIRIZADOS E PRODUÇÃO", estilos["secao"]))
-        linhas = [["EMPRESA / SERVIÇO", "NA SEMANA", "ACUMULADO", "VALOR"]]
-        for m in terceiros:
-            titulo = escape(m["empresa"])
-            if m.get("tipo") == "avulso":
-                titulo += f' <font size="7" color="{LATAO.hexval()}">· avulso</font>'
-            complemento = escape(m["servico"])
-            if not m["entra_no_caixa"]:
-                complemento += ' · <font color="' + AMBAR.hexval() + '">fora do caixa da semana</font>'
-            linhas.append([
-                Paragraph(f'{titulo}<br/><font size="7" color="{CINZA.hexval()}">{complemento}</font>',
-                          estilos["celula"]),
-                Paragraph(f"{numero_br(m['percentual'], 2)}%", estilos["celula_dir"]),
-                Paragraph(f"{numero_br(m['acumulado'], 2)}% de 100%", estilos["celula_dir"]),
-                Paragraph(moeda(m["valor"]), estilos["celula_dir"]),
-            ])
-        linhas.append([
-            Paragraph("<b>TOTAL MEDIDO</b>", estilos["celula"]), "", "",
-            Paragraph(f"<b>{moeda(resumo_t.get('valor_medido', 0))}</b>", estilos["celula_dir"]),
-        ])
-        E.append(_tabela(linhas, [LARGURA_UTIL - 96 * mm, 26 * mm, 34 * mm, 36 * mm], estilos,
-                         alinhar_direita=(1, 2, 3)))
-        if resumo_t.get("valor_producao"):
-            E.append(Paragraph(
-                f"Mão de obra por produção nesta semana: {moeda(resumo_t['valor_producao'])} "
-                f"(profissionais pagos por tarefa, fora da folha por hora).", estilos["legenda"]))
-        if resumo_t.get("valor_fora_do_caixa"):
-            E.append(Paragraph(
-                f"Do total medido, {moeda(resumo_t['valor_fora_do_caixa'])} não entrou no "
-                f"pagamento desta semana, por decisão de fluxo de caixa.", estilos["legenda"]))
+        E.append(_tabela(linhas, [LARGURA_UTIL - 110 * mm, 35 * mm, 25 * mm, 25 * mm, 25 * mm], estilos,
+                         alinhar_direita=(2, 3, 4)))
 
     # ---- fretes ----
     fretes = d.get("fretes") or {}
@@ -461,24 +312,23 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
         E.append(_tabela(linhas, [LARGURA_UTIL - 70 * mm, 30 * mm, 40 * mm], estilos,
                          alinhar_direita=(1, 2)))
 
-    # ---- clima / pendências ----
-    avisos = []
-    for c in d["clima_alertas"]:
-        avisos.append(f"{c['dia_semana']} ({data_br(c['data'])}): {c['clima']}")
+    # ---- pendências ----
     if d["dias_pendentes"]:
-        avisos.append("Dias úteis sem nenhum lançamento: " + ", ".join(d["dias_pendentes"]))
-    if avisos:
-        E.append(Paragraph("OCORRÊNCIAS E PENDÊNCIAS", estilos["secao"]))
-        for a in avisos:
-            E.append(Paragraph("• " + escape(a), estilos["corpo"]))
+        E.append(Paragraph("PENDÊNCIAS", estilos["secao"]))
+        E.append(Paragraph(
+            "• Dias úteis sem nenhum lançamento: " + escape(", ".join(d["dias_pendentes"])),
+            estilos["corpo"]))
 
     # ---- quadro financeiro ----
     E.append(Paragraph("QUADRO FINANCEIRO", estilos["secao"]))
     quadro = [
-        ["FOLHA", "REEMBOLSO GESTOR", "A PAGAR TERCEIROS", "TOTAL PAGO"],
-        [moeda(fin["folha"]), moeda(fin["reembolso"]), moeda(fin["terceiros"]), moeda(fin["pago"])],
+        ["REEMBOLSO GESTOR", "EM ABERTO", "TOTAL PAGO"],
+        [moeda(fin["reembolso"]), moeda(fin["em_aberto"]), moeda(fin["pago"])],
     ]
-    t = Table(quadro, colWidths=[LARGURA_UTIL / 4] * 4)
+    if fin["folha"]:  # semanas antigas, de quando o ponto gerava folha
+        quadro[0].insert(0, "FOLHA")
+        quadro[1].insert(0, moeda(fin["folha"]))
+    t = Table(quadro, colWidths=[LARGURA_UTIL / len(quadro[0])] * len(quadro[0]))
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), LATAO_CLARO),
         ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
@@ -493,8 +343,8 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
     ]))
     E.append(t)
 
-    # ---- folha por profissional ----
-    if d["folha_detalhada"]:
+    # ---- folha por profissional (semanas antigas) ----
+    if fin["folha"] and d["folha_detalhada"]:
         E.append(Paragraph("FOLHA POR PROFISSIONAL", estilos["secao"]))
         linhas = [["PROFISSIONAL", "FUNÇÃO", "HORAS", "TOTAL"]]
         for p in d["folha_detalhada"]:

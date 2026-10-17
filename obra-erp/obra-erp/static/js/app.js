@@ -21,14 +21,12 @@ import * as viewEquipe from './views/equipe.js';
 import * as viewFechamento from './views/fechamento.js';
 import * as viewFinanceiro from './views/financeiro.js';
 import * as viewHome from './views/home.js';
-import * as viewTerceirizados from './views/terceirizados.js';
 
 const VIEWS = {
   home: { el: '#viewHome', modulo: viewHome, titulo: 'PAINEL' },
-  diario: { el: '#viewDiario', modulo: viewDiario, titulo: 'DIÁRIO DE CANTEIRO' },
+  diario: { el: '#viewDiario', modulo: viewDiario, titulo: 'DIÁRIO' },
   equipe: { el: '#viewEquipe', modulo: viewEquipe, titulo: 'EQUIPE' },
   financeiro: { el: '#viewFinanceiro', modulo: viewFinanceiro, titulo: 'CAIXA' },
-  terceirizados: { el: '#viewTerceirizados', modulo: viewTerceirizados, titulo: 'TERCEIRIZADOS' },
   fechamento: { el: '#viewFechamento', modulo: viewFechamento, titulo: 'FECHAMENTO' },
   ajustes: { el: '#viewAjustes', modulo: viewAjustes, titulo: 'AJUSTES' },
 };
@@ -105,9 +103,7 @@ function abrirAcoesRapidas() {
   const dia = estado.dias.find((d) => d.hoje) || estado.diaAtivo || estado.dias[0];
 
   const acoes = [
-    { ico: '✎', titulo: 'Registrar o dia', sub: 'produção, clima e observações',
-      fn: () => navegar('diario') },
-    { ico: '📷', titulo: 'Foto do canteiro', sub: 'anexa ao RDO de hoje',
+    { ico: '📷', titulo: 'Foto do andamento', sub: 'anexa ao diário de hoje',
       fn: () => navegar('diario') },
     { ico: '⏱', titulo: 'Ponto da equipe', sub: 'horas trabalhadas de hoje',
       fn: () => navegar('diario') },
@@ -146,7 +142,6 @@ function abrirAcoesRapidas() {
 
 function ajustarPermissoes() {
   $('.tabbar-btn[data-aba=financeiro]').classList.toggle('hidden', !podeFinanceiro());
-  $('.tabbar-btn[data-aba=terceirizados]').classList.toggle('hidden', !podeFinanceiro());
   $('.tabbar-btn[data-aba=equipe]').classList.toggle('hidden', estado.usuario.papel === 'cliente');
   $('#drawerFoot').classList.toggle('hidden', !podeAdministrar());
 }
@@ -201,9 +196,9 @@ async function selecionarObra(obraId, { renderizar = true } = {}) {
   $('#topbarTitulo').textContent = estado.obra?.nome || 'Obra ERP';
   renderizarDrawer();
 
-  // Uma requisição em vez de quatro: funcionários, etapas, semanas e os dias
+  // Uma requisição em vez de três: funcionários, semanas e os dias
   // da semana atual vêm juntos. O servidor não trabalha menos, mas o aparelho
-  // deixa de esperar três viagens de rede em fila.
+  // deixa de esperar várias viagens de rede em fila.
   aplicarContexto(await api.get(`/api/obras/${obraId}/contexto`, { semCache: true }));
 
   if (renderizar) await renderizarAtual();
@@ -212,12 +207,11 @@ async function selecionarObra(obraId, { renderizar = true } = {}) {
 /** Copia para o estado o pacote devolvido por /api/inicio e /contexto. */
 function aplicarContexto(contexto) {
   if (!contexto) {
-    estado.funcionarios = []; estado.etapas = []; estado.semanas = [];
+    estado.funcionarios = []; estado.semanas = [];
     estado.semanaId = null; estado.semana = null; estado.dias = [];
     return;
   }
   estado.funcionarios = contexto.funcionarios || [];
-  estado.etapas = contexto.etapas || [];
   estado.semanas = contexto.semanas || [];
   estado.semanaId = contexto.semana_id || null;
   estado.semana = estado.semanas.find((s) => s.id === estado.semanaId) || null;
@@ -287,7 +281,7 @@ async function iniciar() {
   renderizarDrawer();
 
   const abaInicial = VIEWS[abaPreferida()] ? abaPreferida() : 'home';
-  const restritas = ['financeiro', 'terceirizados'];
+  const restritas = ['financeiro'];
   const abaSegura = (!podeFinanceiro() && restritas.includes(abaInicial)) ? 'home' : abaInicial;
   await navegar(abaSegura, { forcar: true });
 

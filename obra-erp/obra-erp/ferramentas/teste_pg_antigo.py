@@ -119,11 +119,8 @@ ok(r.status_code == 200, 'painel financeiro funciona', r.status_code)
 r = c2.get('/api/obras/1/dashboard')
 ok(r.status_code == 200, 'dashboard funciona', r.status_code)
 r = c2.get('/api/obras/1/funcionarios')
-ok(r.status_code == 200 and r.get_json()[0]['tipo_contrato'] == 'fixo',
-   'funcionário antigo vira contrato fixo', r.get_json()[0] if r.status_code == 200 else r.status_code)
-r = c2.get('/api/obras/1/terceirizados')
-ok(r.status_code == 200 and r.get_json()['contratos'][0]['tipo'] == 'empresa',
-   'contrato antigo vira empresa', r.status_code)
+ok(r.status_code == 200 and r.get_json()[0]['nome'] == 'Zé',
+   'funcionário antigo continua na equipe', r.get_json()[0] if r.status_code == 200 else r.status_code)
 
 r = c2.post('/api/dias/1/despesas', data={'categoria':'Material','descricao':'Nova com nota',
     'valor':'100','status_pagamento':'Pago','numero_nota':'55555'},

@@ -61,7 +61,7 @@ export async function renderizar(raiz) {
     cartoes.push(kpi({
       rotulo: 'Custo da semana', valor: moedaCurta(sem?.financeiro?.custo_semana || 0),
       sub: sem?.financeiro?.orcamento_previsto
-        ? `${num(sem.financeiro.percentual_orcamento, 1)}% do previsto` : 'sem meta de gasto',
+        ? `${num(sem.financeiro.percentual_orcamento, 1)}% do previsto` : `semana ${sem?.numero ?? '—'}`,
       estado: sem?.financeiro?.farol === 'sem_meta' ? '' : (sem?.financeiro?.farol || ''),
     }));
     cartoes.push(kpi({
@@ -72,13 +72,8 @@ export async function renderizar(raiz) {
   } else {
     cartoes.push(kpi({ rotulo: 'Equipe ativa', valor: num(t.equipe_ativa), sub: 'profissionais', destaque: true }));
     cartoes.push(kpi({ rotulo: 'Horas na semana', valor: num(sem?.indicadores?.total_horas, 1) + ' h', sub: `${sem?.indicadores?.dias_trabalhados || 0} dia(s)` }));
-    cartoes.push(kpi({ rotulo: 'Fotos no diário', valor: num(t.total_fotos), sub: 'registro fotográfico' }));
   }
-  cartoes.push(kpi({
-    rotulo: 'Avanço físico',
-    valor: d.avanco_fisico === null || d.avanco_fisico === undefined ? '—' : `${num(d.avanco_fisico, 1)}%`,
-    sub: d.etapas?.length ? `${d.etapas.length} etapas` : 'sem cronograma',
-  }));
+  cartoes.push(kpi({ rotulo: 'Fotos da obra', valor: num(t.total_fotos), sub: 'andamento registrado' }));
   blocos.push(`<div class="kpi-grid">${cartoes.join('')}</div>`);
 
   // ---- orçamento da obra ----
@@ -103,38 +98,15 @@ export async function renderizar(raiz) {
       <div class="section-head"><h3>Semana ${sem.numero}</h3>
         <button class="btn btn-outline btn-small" data-ir="diario">Abrir diário</button></div>
       <div class="card">
-        <div class="row-between" style="margin-bottom:8px">
-          <span class="eyebrow">METAS DA SEMANA</span>
-          ${sem.metas_resumo?.total
-            ? `<span class="small muted">${sem.metas_resumo.concluidas}/${sem.metas_resumo.total} concluídas</span>` : ''}
-        </div>
-
-        ${sem.metas?.length ? sem.metas.slice(0, 4).map((m) => `
-          <div class="meta-linha ${m.concluida ? 'concluida' : ''}">
-            <div class="meta-topo">
-              <div class="meta-nome">${esc(m.nome)}
-                ${m.critica ? `<span class="badge badge-vencida">${m.semanas_arrastada + 1}ª sem.</span>`
-                  : (m.arrastada && !m.concluida ? '<span class="badge badge-em-aberto">arrastada</span>' : '')}
-              </div>
-              <div class="meta-pct">${num(m.percentual, 0)}%</div>
-            </div>
-            <div class="progresso-trilho">
-              <div class="progresso-preenchido meta" style="width:${Math.min(m.percentual, 100)}%"></div>
-            </div>
-          </div>`).join('')
-        : `<p style="margin-bottom:8px">${sem.meta ? esc(sem.meta) : '<span class="rdo-vazio">Nenhuma meta definida.</span>'}</p>`}
-        ${sem.metas?.length > 4 ? `<p class="small muted" style="margin:8px 0 0">+${sem.metas.length - 4} outra(s) meta(s)</p>` : ''}
-
         ${financeiro && fin.orcamento_previsto ? barraProgresso(fin.percentual_orcamento,
             `${moeda(fin.custo_semana)} gastos`, `previsto ${moeda(fin.orcamento_previsto)}`) : ''}
         ${sem.dias_pendentes?.length ? `
-          <div class="alerta perigo" style="margin-top:12px;margin-bottom:0">
+          <div class="alerta perigo" style="margin-bottom:12px">
             <span class="alerta-ico">●</span>
             <div><b>Dias sem lançamento:</b> ${sem.dias_pendentes.map(esc).join(', ')}</div>
           </div>` : ''}
-        <div class="progresso-legenda" style="margin-top:12px">
+        <div class="progresso-legenda">
           <span>${num(sem.indicadores?.total_horas, 1)} h lançadas</span>
-          <span>${sem.indicadores?.dias_com_rdo || 0}/7 dias com RDO</span>
           <span>${sem.indicadores?.total_fotos || 0} fotos</span>
         </div>
       </div>`);
@@ -163,22 +135,6 @@ export async function renderizar(raiz) {
           <span>■ realizado</span><span>— linha verde: previsto</span>
         </div>
       </div>`);
-  }
-
-  // ---- etapas ----
-  if (d.etapas?.length) {
-    const linhas = d.etapas.slice(0, 8).map((e) => `
-      <div style="margin-bottom:10px">
-        <div class="progresso-legenda" style="margin:0 0 4px">
-          <span style="color:var(--text)">${esc(e.nome)}</span>
-          <span>${num(e.percentual, 0)}%${e.peso ? ` · peso ${num(e.peso, 0)}` : ''}</span>
-        </div>
-        <div class="progresso-trilho"><div class="progresso-preenchido" style="width:${Math.min(e.percentual, 100)}%"></div></div>
-      </div>`).join('');
-    blocos.push(`
-      <div class="section-head"><h3>Cronograma físico</h3>
-        <button class="btn btn-outline btn-small" data-ir="ajustes">Editar</button></div>
-      <div class="card">${linhas}</div>`);
   }
 
   // ---- contas a vencer ----
@@ -242,7 +198,7 @@ export async function renderizar(raiz) {
   // ---- atalhos ----
   blocos.push(`
     <div class="btn-linha" style="margin-top:18px">
-      <button class="btn btn-brass" data-ir="diario">Lançar o dia de hoje</button>
+      <button class="btn btn-brass" data-ir="diario">Abrir o diário de hoje</button>
       <button class="btn btn-outline" data-ir="fechamento">Fechamento</button>
     </div>`);
 

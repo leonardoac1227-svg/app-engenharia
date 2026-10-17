@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.0.0"
+__version__ = "3.1.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -183,10 +183,9 @@ def create_app() -> Flask:
     from .blueprints.paginas import bp as bp_paginas
     from .blueprints.relatorios import bp as bp_relatorios
     from .blueprints.locacoes import bp as bp_locacoes
-    from .blueprints.terceirizados import bp as bp_terceirizados
 
     for blueprint in (bp_paginas, bp_auth, bp_obras, bp_diario, bp_equipe, bp_financeiro,
-                      bp_relatorios, bp_terceirizados, bp_locacoes, bp_contexto):
+                      bp_relatorios, bp_locacoes, bp_contexto):
         app.register_blueprint(blueprint)
 
     @app.context_processor

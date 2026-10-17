@@ -259,16 +259,3 @@ def obra_do_funcionario(funcionario_id: int) -> int:
         raise ApiErro("Funcionário não encontrado.", 404)
     return garantir_acesso_obra(row["obra_id"])
 
-
-def obra_da_etapa(etapa_id: int) -> int:
-    row = um("SELECT obra_id FROM etapas WHERE id = ?", (etapa_id,))
-    if not row:
-        raise ApiErro("Etapa não encontrada.", 404)
-    return garantir_acesso_obra(row["obra_id"])
-
-
-def obra_da_meta(meta_id: int) -> int:
-    row = um("SELECT obra_id FROM metas WHERE id = ?", (meta_id,))
-    if not row:
-        raise ApiErro("Meta não encontrada.", 404)
-    return garantir_acesso_obra(row["obra_id"])

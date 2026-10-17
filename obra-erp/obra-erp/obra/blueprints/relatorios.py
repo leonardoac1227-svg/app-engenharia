@@ -26,8 +26,6 @@ def _sem_financeiro(dados: dict) -> dict:
     copia["despesas"] = []
     copia["despesas_por_categoria"] = {}
     copia["folha_detalhada"] = []
-    copia["terceirizados"] = []
-    copia["terceirizados_resumo"] = {}
     indicadores = dict(dados["indicadores"])
     indicadores.pop("custo_medio_dia", None)
     copia["indicadores"] = indicadores

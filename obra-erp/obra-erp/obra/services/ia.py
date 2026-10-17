@@ -24,8 +24,8 @@ PROMPT_SISTEMA = (
     "Você é engenheiro civil sênior redigindo o resumo executivo semanal de uma obra "
     "para o cliente contratante. Escreva 2 parágrafos curtos (máximo 120 palavras no total), "
     "em português do Brasil, tom técnico e direto, sem saudações, sem títulos, sem bullets e "
-    "sem inventar informação que não esteja nos dados. Primeiro parágrafo: avanço físico e "
-    "ocorrências. Segundo parágrafo: situação financeira e pontos de atenção."
+    "sem inventar informação que não esteja nos dados. Primeiro parágrafo: equipe, registro "
+    "fotográfico e ocorrências. Segundo parágrafo: situação financeira e pontos de atenção."
 )
 
 
@@ -34,22 +34,12 @@ def _fatos(d: dict) -> str:
     linhas = [
         f"Obra: {d['obra_nome']}",
         f"Semana {d['semana_numero']} ({data_br(d['data_inicio'])} a {data_br(d['data_fim'])})",
-        f"Meta: {d['meta'] or 'não definida'} — {'atingida' if d['meta_atingida'] else 'não atingida'}",
-    ]
-    for dia in d["dias"]:
-        if dia["producao_dia"]:
-            linhas.append(f"{dia['dia_semana']}: {dia['producao_dia']}")
-        if dia["observacoes"]:
-            linhas.append(f"{dia['dia_semana']} (observação): {dia['observacoes']}")
-    for c in d["clima_alertas"]:
-        linhas.append(f"Clima em {c['dia_semana']}: {c['clima']}")
-    for m in d["medicoes"]:
-        linhas.append(f"Medição {m['dia_semana']}: {m['descricao']} = {numero_br(m['quantidade'], 2)} {m['unidade']}")
-    linhas += [
+        f"Fotos anexadas: {ind['total_fotos']}",
         f"Horas totais: {numero_br(ind['total_horas'], 1)}; efetivo médio: {numero_br(ind['efetivo_medio'], 1)}",
-        f"Folha: {moeda(fin['folha'])}; materiais/serviços: {moeda(fin['despesas'])}; "
-        f"custo total: {moeda(fin['custo_semana'])}",
+        f"Despesas: {moeda(fin['despesas'])}; custo total: {moeda(fin['custo_semana'])}",
     ]
+    if fin["folha"]:
+        linhas.append(f"Folha (lançamentos antigos): {moeda(fin['folha'])}")
     if fin["orcamento_previsto"]:
         linhas.append(
             f"Orçamento previsto: {moeda(fin['orcamento_previsto'])}; "
@@ -66,31 +56,20 @@ def resumo_automatico(d: dict) -> str:
     fin, ind = d["financeiro"], d["indicadores"]
     partes = []
 
-    producoes = [f"{x['dia_semana'].lower()} ({x['producao_dia'].rstrip('.')})"
-                 for x in d["dias"] if x["producao_dia"]]
-    if producoes:
-        destaque = "; ".join(producoes[:3])
-        frase = f"Semana com {len(producoes)} dia(s) de produção registrada: {destaque}"
-        frase += " e demais registros no diário." if len(producoes) > 3 else "."
-        partes.append(frase)
-    else:
-        partes.append("Nenhuma produção foi registrada no diário nesta semana.")
-
     if ind["total_horas"]:
         partes.append(
             f"Foram lançadas {numero_br(ind['total_horas'], 1)} horas de mão de obra em "
             f"{ind['dias_trabalhados']} dia(s), com efetivo médio de {numero_br(ind['efetivo_medio'], 1)} profissionais.")
 
-    if d["clima_alertas"]:
-        dias_clima = ", ".join(c["dia_semana"].lower() for c in d["clima_alertas"])
-        partes.append(f"Houve ocorrência de clima adverso em: {dias_clima}.")
+    if ind["total_fotos"]:
+        partes.append(f"{ind['total_fotos']} foto(s) do andamento foram anexadas ao diário.")
 
-    if d["meta"]:
-        partes.append(f"A meta da semana ({d['meta'].rstrip('.')}) "
-                      f"{'foi atingida' if d['meta_atingida'] else 'não foi atingida'}.")
-
-    financeiro = (f"O custo total da semana foi de {moeda(fin['custo_semana'])}, sendo "
-                  f"{moeda(fin['folha'])} de folha e {moeda(fin['despesas'])} de materiais e serviços.")
+    financeiro = f"O custo total da semana foi de {moeda(fin['custo_semana'])}"
+    if fin["folha"]:
+        financeiro += (f", sendo {moeda(fin['folha'])} de folha e {moeda(fin['despesas'])} "
+                       "de materiais e serviços.")
+    else:
+        financeiro += "."
     if fin["orcamento_previsto"]:
         situacao = "dentro do previsto" if fin["percentual_orcamento"] <= 100 else "acima do previsto"
         financeiro += (f" Isso representa {numero_br(fin['percentual_orcamento'], 1)}% do orçamento da semana "
