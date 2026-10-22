@@ -80,12 +80,14 @@ obra/
   storage.py            → anexos: disco local ou Supabase Storage
   utils.py              → validação de entrada, moeda pt-BR, anexos (Pillow)
   security.py           → sessão, CSRF, papéis, escopo por obra, rate-limit
-  blueprints/           → paginas, auth, obras, diario, equipe, financeiro, relatorios
+  blueprints/           → paginas, auth, obras, diario, equipe, financeiro, relatorios, assistente
   services/
     fechamento.py       → consolidação da semana e dashboard
     relatorio.py        → exportação .txt e .csv
     pdf.py              → relatório em PDF (reportlab)
-    ia.py               → resumo executivo (regras + Claude opcional)
+    ia.py               → resumo executivo (regras + IA opcional)
+    ia_provedores.py    → Gemini (gratuito) e Claude (reserva paga)
+    assistente.py       → fala/arquivos → lançamentos propostos e RDO por IA
 static/
   css/style.css         → design system (tokens, componentes)
   js/                   → ES modules: api, estado, navegacao, util, views/
@@ -429,12 +431,71 @@ não vê valor de contrato nem no fechamento.
 
 ---
 
-## Resumo executivo por IA (opcional)
+## Assistente de IA
 
-Sem chave de API, o resumo é gerado por regras a partir dos próprios números
-(sempre funciona, inclusive offline no servidor). Com `ANTHROPIC_API_KEY`
-definida, o texto passa a ser redigido pelo Claude, com fallback silencioso
-para as regras se a chamada falhar — o fechamento nunca quebra por causa disso.
+Fale (ou escreva) como foi o dia e anexe a nota fiscal: o assistente preenche
+o app sozinho. Fica no Diário (botão **Assistente de IA**) e no botão **+**.
+
+Exemplo de fala:
+
+> Hoje o João e o Pedro fizeram 8 horas, o Carlos saiu meio-dia porque foi ao
+> médico. Concretamos a laje do 2º pavimento, uns 12 m³. Choveu à tarde.
+> Comprei 20 sacos de cimento na Casa do Construtor, nota 4521, R$ 1.380,
+> paguei do meu bolso. *(e anexa a foto da nota)*
+
+O que ele faz:
+
+| Ação | Exemplo do que você diz |
+|---|---|
+| Relatório do dia (RDO) em texto técnico | "concretamos a laje", "choveu à tarde", "o fiscal veio" |
+| Ponto e justificativas | "o João fez 8 horas", "o Carlos faltou, atestado" |
+| Cadastro de profissional novo | "entrou o Marcos, armador" |
+| Despesa (com nota, vencimento, parcelas e o anexo) | "comprei...", "boleto para dia 10", "em 3x" |
+| Leitura de nota, cupom e boleto | anexe a foto ou o PDF: valor, número, fornecedor e vencimento saem dele |
+| Correção de lançamento | "na verdade foram 1.500" |
+| Baixa de pagamento | "paguei a nota 4521" |
+| Exclusão | "apaga o lançamento da areia" (sempre pede um toque de confirmação) |
+| Fotos do andamento | anexe a foto da obra: vira foto do diário, com legenda e ambiente |
+
+- **Gravar automaticamente** (ligado por padrão): tudo que estiver completo
+  é gravado na hora. Desligado, os cartões aparecem para conferir e editar antes.
+- O microfone 🎤 usa o ditado do próprio navegador (Chrome no Android, Safari
+  no iPhone). Também dá para usar o microfone do teclado do celular.
+- Tudo passa pelas mesmas regras dos formulários: trava de nota em
+  duplicidade (com "Lançar mesmo assim"), auditoria e permissões. O mestre de
+  obra usa o assistente para diário, ponto e fotos, mas não para o caixa.
+- Falou de um dia que ainda não tem semana? O gestor tem a semana criada na hora.
+- No diário, **Relatório do dia → ✨ Redigir com IA** escreve o RDO a partir
+  do que já foi lançado (ponto, fotos, compras). O RDO sai no PDF semanal.
+- O resumo executivo do fechamento também usa a IA quando ela está ligada; sem
+  ela, é montado por regras e nunca quebra.
+
+### Configurar (5 minutos)
+
+1. **Gemini (gratuito):** entre em <https://aistudio.google.com/apikey> com
+   uma conta Google, clique em *Create API key* e copie a chave.
+2. No Render: *Environment* → adicione `GEMINI_API_KEY` com a chave → *Save*.
+   O app reinicia sozinho.
+3. **Claude (pago, reserva):** em <https://platform.claude.com/settings/keys>
+   crie uma chave, coloque crédito e adicione `ANTHROPIC_API_KEY` no Render.
+   Ele só é usado quando o Gemini falha ou estoura o limite gratuito.
+   **A assinatura do Claude (Pro/Max) não serve aqui**: a API é cobrada à parte.
+4. Confira em `https://seu-app.onrender.com/health`: o campo `"ia"` mostra
+   `["gemini", "anthropic"]`.
+
+Bom saber: na camada gratuita do Gemini o Google pode usar o conteúdo enviado
+para melhorar os produtos dele. Se as notas fiscais não puderem sair da
+empresa nessas condições, ative o faturamento no Google AI Studio (a cota paga
+não é usada para treino) ou use `IA_ORDEM=anthropic`.
+
+| Variável | Para quê |
+|---|---|
+| `GEMINI_API_KEY` | liga o assistente com o Gemini gratuito |
+| `ANTHROPIC_API_KEY` | Claude pago, reserva (ou principal, sem Gemini) |
+| `GEMINI_MODEL` | padrão `gemini-flash-latest` |
+| `ANTHROPIC_MODEL` | padrão `claude-opus-5-5`; `claude-haiku-5-5` sai bem mais barato |
+| `IA_ORDEM` | padrão `gemini,anthropic` |
+| `IA_LIMITE_HORA` | pedidos por usuário por hora, padrão 60 |
 
 ---
 
@@ -457,7 +518,7 @@ para as regras se a chamada falhar — o fechamento nunca quebra por causa disso
 | `SECRET_KEY` | assina a sessão (se ausente, é gerada e salva em `DATA_DIR`) |
 | `ADMIN_EMAIL` / `ADMIN_SENHA` | credencial do primeiro gestor |
 | `FORCE_HTTPS` | `1` em produção (cookie `Secure`) |
-| `ANTHROPIC_API_KEY` | opcional, liga o resumo por IA |
+| `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | opcionais, ligam o assistente de IA (ver acima) |
 | `MAX_UPLOAD_MB` | opcional, padrão 25 |
 
 Migrando da v1: copie o `obra_erp.db` antigo para `DATA_DIR` e a pasta

@@ -14,7 +14,14 @@ SECRET_KEY      Chave de assinatura da sessão. Se ausente, é gerada e salva
 ADMIN_EMAIL     E-mail do primeiro usuário gestor (padrão: gestor@obra.local).
 ADMIN_SENHA     Senha inicial desse usuário (padrão: obra123 — troque no 1º acesso).
 ADMIN_NOME      Nome exibido do primeiro usuário.
-ANTHROPIC_API_KEY  Habilita o resumo executivo semanal por IA (opcional).
+GEMINI_API_KEY  Chave gratuita do Google AI Studio. Liga o assistente de IA
+                (relatório diário, leitura de notas fiscais, lançamentos por voz).
+GEMINI_MODEL    Modelo do Gemini (padrão: gemini-flash-latest).
+ANTHROPIC_API_KEY  API paga do Claude. Reserva quando o Gemini falha ou estoura o
+                limite gratuito — e principal se não houver chave do Gemini.
+ANTHROPIC_MODEL Modelo do Claude (padrão: claude-opus-5-5).
+IA_ORDEM        Ordem de tentativa dos provedores (padrão: gemini,anthropic).
+IA_LIMITE_HORA  Pedidos ao assistente por usuário, por hora (padrão 60).
 MAX_UPLOAD_MB   Tamanho máximo de cada envio (padrão 25 MB).
 REEMBOLSO_PADRAO  Quem recebe o reembolso quando ninguém é informado (padrão: Léo).
 JORNADA_HORAS   Horas de um dia completo de trabalho (padrão 8). Abaixo disso, de
@@ -69,8 +76,21 @@ ADMIN_EMAIL = os.environ.get("ADMIN_EMAIL", "gestor@obra.local")
 ADMIN_SENHA = os.environ.get("ADMIN_SENHA", "obra123")
 ADMIN_NOME = os.environ.get("ADMIN_NOME", "Gestor")
 
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+# ---------------------------------------------------------------- inteligência artificial
+#
+# Gemini primeiro (camada gratuita do Google), Claude como reserva paga. Sem
+# nenhuma das duas chaves o app funciona igual — só o assistente fica desligado.
+
+ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-opus-5-5"
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-latest"
+IA_ORDEM = [p.strip().lower() for p in (os.environ.get("IA_ORDEM") or "gemini,anthropic").split(",")
+            if p.strip()]
+try:
+    IA_LIMITE_HORA = max(int(os.environ.get("IA_LIMITE_HORA", "60")), 1)
+except ValueError:
+    IA_LIMITE_HORA = 60
 
 # ---------------------------------------------------------------- banco de dados
 #

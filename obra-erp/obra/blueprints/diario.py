@@ -73,7 +73,6 @@ def criar_semana(obra_id: int):
     ultima = um(
         "SELECT numero, data_inicio FROM semanas WHERE obra_id = ? ORDER BY numero DESC LIMIT 1",
         (obra_id,))
-    numero_novo = (ultima["numero"] + 1) if ultima else 1
     # Por padrão a nova semana começa na segunda seguinte à última cadastrada.
     padrao = somar_dias(ultima["data_inicio"], 7) if (ultima and ultima["data_inicio"]) else segunda_da_semana()
     inicio = _segunda_feira(dados.get("data_inicio"), padrao)
@@ -81,12 +80,21 @@ def criar_semana(obra_id: int):
     if um("SELECT id FROM semanas WHERE obra_id = ? AND data_inicio = ?", (obra_id, inicio)):
         raise ApiErro("Já existe uma semana cadastrada começando nesta data.", 409)
 
+    criada = criar_semana_em(
+        obra_id, inicio, texto(dados.get("meta"), 400),
+        numero(dados.get("orcamento_previsto"), 0, 0, campo="o orçamento previsto"))
+    return jsonify(criada), 201
+
+
+def criar_semana_em(obra_id: int, inicio: str, meta: str = "", orcamento: float = 0) -> dict:
+    """Cria a semana que começa em `inicio` (uma segunda-feira) com os seus 7 dias."""
+    ultima = um("SELECT numero FROM semanas WHERE obra_id = ? ORDER BY numero DESC LIMIT 1", (obra_id,))
+    numero_novo = (ultima["numero"] + 1) if ultima else 1
     cur = executar(
         """INSERT INTO semanas (obra_id, numero, data_inicio, meta, meta_atingida,
                                 orcamento_previsto, fechada, criado_em)
            VALUES (?, ?, ?, ?, 0, ?, 0, ?)""",
-        (obra_id, numero_novo, inicio, texto(dados.get("meta"), 400),
-         numero(dados.get("orcamento_previsto"), 0, 0, campo="o orçamento previsto"), agora_iso()),
+        (obra_id, numero_novo, inicio, meta, orcamento, agora_iso()),
     )
     semana_nova = cur.lastrowid
     garantir_dias(semana_nova)
@@ -95,8 +103,8 @@ def criar_semana(obra_id: int):
 
     registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova,
                         f"Semana {numero_novo}" + (f" · {parcelas} parcela(s) prevista(s)" if parcelas else ""))
-    return jsonify({"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
-                    "parcelas_previstas": parcelas}), 201
+    return {"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
+            "parcelas_previstas": parcelas}
 
 
 @bp.put("/semanas/<int:semana_id>")
@@ -183,6 +191,24 @@ def detalhar_dia(dia_id: int):
                        (dia_id,))
     ]
     return jsonify(dia)
+
+
+@bp.put("/dias/<int:dia_id>")
+@login_obrigatorio
+def atualizar_dia(dia_id: int):
+    """Relatório diário (RDO): serviços executados, clima e observações."""
+    obra_do_dia(dia_id)
+    usuario = exigir_lancamento()
+    dados = request.get_json(silent=True) or {}
+    limites = {"producao_dia": 6000, "clima": 200, "observacoes": 4000}
+    campos = [c for c in limites if c in dados]
+    if not campos:
+        raise ApiErro("Nada para atualizar.")
+    executar(
+        f"UPDATE dias SET {', '.join(f'{c} = ?' for c in campos)}, atualizado_em = ? WHERE id = ?",
+        [texto(dados[c], limites[c]) for c in campos] + [agora_iso(), dia_id])
+    registrar_auditoria(usuario, "salvou_rdo", "dia", dia_id, ", ".join(campos))
+    return jsonify({"ok": True})
 
 
 @bp.get("/dias/<int:dia_id>/totais")

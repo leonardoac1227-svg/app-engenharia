@@ -101,7 +101,7 @@ def listar_dias(semana_id: int, com_fotos: bool = True) -> list[dict]:
     """Dias da semana com os indicadores que alimentam os alertas da interface."""
     garantir_dias(semana_id)
     rows = todos(
-        """SELECT id, dia_semana, data, atualizado_em
+        """SELECT id, dia_semana, data, atualizado_em, producao_dia, clima, observacoes
              FROM dias WHERE semana_id = ?""",
         (semana_id,),
     )

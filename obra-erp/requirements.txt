@@ -17,3 +17,7 @@ pypdf>=4.0,<6
 # Planilha de pagamento no modelo do escritório (aba por obra, fórmulas de
 # totalização). Sem ela o app roda, mas o botão de .xlsx no fechamento falha.
 openpyxl>=3.1,<4
+
+# SDK do Claude — usado só quando ANTHROPIC_API_KEY está definida (reserva paga
+# do assistente de IA). O Gemini é chamado por HTTP, sem dependência.
+anthropic>=2.0,<3

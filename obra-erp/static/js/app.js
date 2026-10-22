@@ -16,6 +16,7 @@ import {
 } from './util.js';
 
 import * as viewAjustes from './views/ajustes.js';
+import * as viewAssistente from './views/assistente.js';
 import * as viewDiario from './views/diario.js';
 import * as viewEquipe from './views/equipe.js';
 import * as viewFechamento from './views/fechamento.js';
@@ -29,6 +30,7 @@ const VIEWS = {
   financeiro: { el: '#viewFinanceiro', modulo: viewFinanceiro, titulo: 'CAIXA' },
   fechamento: { el: '#viewFechamento', modulo: viewFechamento, titulo: 'FECHAMENTO' },
   ajustes: { el: '#viewAjustes', modulo: viewAjustes, titulo: 'AJUSTES' },
+  assistente: { el: '#viewAssistente', modulo: viewAssistente, titulo: 'ASSISTENTE' },
 };
 
 // ---------------------------------------------------------------- navegação
@@ -152,7 +154,7 @@ function atualizarAlertasTabbar() {
 /** O botão flutuante muda de repertório conforme o papel e a tela atual. */
 function atualizarFab() {
   const fab = $('#btnFab');
-  const escondido = !podeLancar() || estado.aba === 'ajustes' || !estado.obraId;
+  const escondido = !podeLancar() || ['ajustes', 'assistente'].includes(estado.aba) || !estado.obraId;
   fab.classList.toggle('hidden', escondido);
 }
 
@@ -160,6 +162,8 @@ function abrirAcoesRapidas() {
   const dia = estado.dias.find((d) => d.hoje) || estado.diaAtivo || estado.dias[0];
 
   const acoes = [
+    { ico: '🤖', titulo: 'Assistente de IA', sub: 'fale ou anexe a nota: ele preenche tudo',
+      fn: () => viewAssistente.abrirAssistente(dia?.data) },
     { ico: '📷', titulo: 'Foto do andamento', sub: 'anexa ao diário de hoje',
       fn: () => navegar('diario') },
     { ico: '⏱', titulo: 'Ponto da equipe', sub: 'horas trabalhadas de hoje',

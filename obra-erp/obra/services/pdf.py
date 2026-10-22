@@ -293,6 +293,21 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
         E.append(_tabela(linhas, [LARGURA_UTIL - 110 * mm, 35 * mm, 25 * mm, 25 * mm, 25 * mm], estilos,
                          alinhar_direita=(2, 3, 4)))
 
+    # ---- relatório diário (RDO) ----
+    dias_com_rdo = [dia for dia in d["dias"]
+                    if dia.get("producao_dia") or dia.get("clima") or dia.get("observacoes")]
+    if dias_com_rdo:
+        E.append(Paragraph("RELATÓRIO DIÁRIO DE OBRA", estilos["secao"]))
+        for dia in dias_com_rdo:
+            E.append(Paragraph(f"<b>{escape(dia['dia_semana'])}, {data_br(dia['data'])}</b>"
+                               + (f" · Clima: {escape(dia['clima'])}" if dia.get("clima") else ""),
+                               estilos["celula"]))
+            for rotulo, campo in (("Serviços executados", "producao_dia"), ("Observações", "observacoes")):
+                for i, paragrafo in enumerate(p for p in (dia.get(campo) or "").split("\n") if p.strip()):
+                    prefixo = f"<b>{rotulo}:</b> " if i == 0 else ""
+                    E.append(Paragraph(prefixo + escape(paragrafo.strip()), estilos["corpo"]))
+            E.append(Spacer(1, 5))
+
     # ---- fretes ----
     fretes = d.get("fretes") or {}
     if fretes.get("viagens") and fin:

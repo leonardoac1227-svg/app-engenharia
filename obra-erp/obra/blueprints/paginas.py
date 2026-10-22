@@ -118,4 +118,10 @@ def health():
         "banco": config.BACKEND,
         "anexos": "supabase" if storage.usando_supabase() else "disco",
         "tema": "claro-2.2",
+        "ia": _provedores_ia(),
     }
+
+
+def _provedores_ia() -> list[str]:
+    from ..services.ia_provedores import provedores_configurados
+    return provedores_configurados()
