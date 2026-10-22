@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.5.0"
+__version__ = "3.6.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -150,7 +150,7 @@ def create_app() -> Flask:
             "form-action 'self'; frame-ancestors 'self'; base-uri 'self'"
         ))
         resposta.headers.setdefault(
-            "Permissions-Policy", "geolocation=(), microphone=(), camera=(self)")
+            "Permissions-Policy", "geolocation=(), microphone=(self), camera=(self)")
         if request.path.startswith("/api"):
             resposta.headers.setdefault("Cache-Control", "no-store")
         return resposta
@@ -195,9 +195,10 @@ def create_app() -> Flask:
     from .blueprints.paginas import bp as bp_paginas
     from .blueprints.relatorios import bp as bp_relatorios
     from .blueprints.locacoes import bp as bp_locacoes
+    from .blueprints.assistente import bp as bp_assistente
 
     for blueprint in (bp_paginas, bp_auth, bp_obras, bp_diario, bp_equipe, bp_financeiro,
-                      bp_relatorios, bp_locacoes, bp_contexto):
+                      bp_relatorios, bp_locacoes, bp_contexto, bp_assistente):
         app.register_blueprint(blueprint)
 
     @app.context_processor
@@ -218,6 +219,11 @@ def create_app() -> Flask:
             "Anexos: disco local (%s). Sem SUPABASE_URL/SUPABASE_SERVICE_KEY, "
             "fotos e notas fiscais são APAGADAS a cada novo deploy no Render. "
             "Veja SUPABASE.md.", config.UPLOAD_DIR)
+
+    from .services import ia_provedores
+    provedores = ia_provedores.provedores_configurados()
+    app.logger.info("Assistente de IA: %s", " → ".join(provedores) if provedores
+                    else "desligado (sem GEMINI_API_KEY nem ANTHROPIC_API_KEY)")
 
     for aviso in config.problemas_de_configuracao():
         app.logger.warning("Configuração: %s", aviso)

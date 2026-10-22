@@ -1027,3 +1027,83 @@ input[type=file] { padding: 10px; font-size: 13px; color: var(--text-muted); }
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: .01ms !important; transition-duration: .01ms !important; }
 }
+
+/* ------------------------------------------------------------ ASSISTENTE DE IA */
+
+.ia-atalho {
+  display: flex; align-items: center; gap: 12px; width: 100%;
+  margin: 10px 0 2px; padding: 14px 16px;
+  border: 1.5px solid var(--primary-line); border-radius: var(--r-lg);
+  background: var(--primary-soft); color: var(--text);
+  font: inherit; text-align: left; cursor: pointer;
+}
+.ia-atalho:active { transform: scale(.99); }
+.ia-atalho-ico { font-size: 24px; line-height: 1; }
+.ia-atalho-corpo { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+
+.ia-config { padding: 12px 14px; }
+.ia-conversa { display: flex; flex-direction: column; gap: 10px; margin: 6px 0 12px; }
+.ia-msg { display: flex; flex-direction: column; gap: 8px; }
+.ia-usuario { align-items: flex-end; }
+.ia-assistente { align-items: stretch; }
+.ia-balao {
+  max-width: 100%; padding: 11px 14px; border-radius: var(--r-lg);
+  background: var(--surface); border: 1px solid var(--border-soft);
+  font-size: 14.5px; line-height: 1.5; overflow-wrap: anywhere;
+}
+.ia-usuario .ia-balao {
+  max-width: 88%; background: var(--primary); color: var(--on-primary); border-color: var(--primary);
+  border-bottom-right-radius: 6px;
+}
+.ia-assistente .ia-balao { border-bottom-left-radius: 6px; }
+.ia-usuario .ia-arquivos { margin-top: 6px; opacity: .85; }
+.ia-erro { background: var(--danger-soft); color: var(--danger); border-color: transparent; }
+.ia-aviso { color: var(--warn); padding: 0 4px; }
+.ia-pensando span { animation: ia-pisca 1.2s infinite; }
+.ia-pensando span:nth-child(2) { animation-delay: .2s; }
+.ia-pensando span:nth-child(3) { animation-delay: .4s; }
+@keyframes ia-pisca { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+
+.ia-acao {
+  padding: 12px 14px; border-radius: var(--r-md);
+  background: var(--surface); border: 1px solid var(--border);
+}
+.ia-acao.ok { border-color: var(--ok); background: var(--ok-soft); }
+.ia-acao.erro { border-color: var(--danger); }
+.ia-acao-titulo { display: flex; align-items: center; gap: 8px; font-size: 14.5px; cursor: pointer; }
+.ia-acao-titulo input { width: 18px; height: 18px; accent-color: var(--primary); }
+.ia-corpo { border: 0; padding: 0; margin: 6px 0 0; min-width: 0; }
+.ia-corpo p { margin: 4px 0; }
+.ia-data { max-width: 200px; }
+.ia-grade { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.ia-campo { display: block; margin-top: 8px; min-width: 0; }
+.ia-campo > span { display: block; margin-bottom: 4px; font-size: 11.5px; font-weight: 650; color: var(--text-muted); }
+.ia-campo input, .ia-campo select, .ia-campo textarea { padding: 9px 11px; font-size: 14px; }
+.ia-campo textarea { min-height: 70px; }
+.ia-ponto { display: grid; grid-template-columns: 1fr 70px 1.2fr; gap: 6px; align-items: center; margin-top: 6px; }
+.ia-ponto input { padding: 8px 9px; font-size: 14px; }
+.ia-ponto-nome { font-size: 13.5px; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.ia-fotos { display: flex; gap: 6px; overflow-x: auto; padding: 4px 0; }
+.ia-fotos img { width: 84px; height: 84px; object-fit: cover; border-radius: var(--r-sm); flex: none; }
+.ia-erro-txt { color: var(--danger); }
+
+.ia-composer { position: sticky; bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 8px); z-index: 5; box-shadow: var(--sh-3); }
+.ia-composer textarea { min-height: 64px; }
+.ia-barra { display: flex; gap: 8px; align-items: center; margin-top: 10px; }
+.ia-barra .ia-enviar { flex: 1; width: auto; }
+.ia-gravando { background: var(--danger) !important; color: #fff; animation: ia-pisca 1.4s infinite; }
+.ia-ouvindo { color: var(--danger); margin-top: 8px; }
+.ia-anexos { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; }
+.ia-anexo {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 100%;
+  padding: 5px 6px 5px 10px; border-radius: var(--r-pill);
+  background: var(--surface-3); font-size: 12.5px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap;
+}
+.ia-anexo button { border: 0; background: none; color: var(--text-muted); cursor: pointer; font-size: 12px; }
+
+@media (max-width: 380px) {
+  .ia-grade { grid-template-columns: 1fr; }
+  .ia-ponto { grid-template-columns: 1fr 64px; }
+  .ia-ponto input[type=text] { grid-column: 1 / -1; }
+}

@@ -9,6 +9,7 @@ import { recarregarSemana } from '../navegacao.js';
 import {
   abrirLightbox, badgeStatus, confirmar, dataBR, esc, moeda, num, toast, tratarFotosQuebradas, vazio,
 } from '../util.js';
+import { abrirAssistente } from './assistente.js';
 import { htmlBarraSemana, htmlDiasStrip, ligarBarraSemana } from './comum.js';
 import { abrirModalDespesa, htmlAnexos, ligarLinksAnexo, textoReembolso } from './financeiro.js';
 
@@ -77,6 +78,37 @@ export async function renderizar(raiz) {
         ${podeFinanceiro() ? ` · ${dia.qtd_despesas ? `✓ ${dia.qtd_despesas} lançamento(s)` : '○ sem lançamentos'}` : ''}
       </div>
     </div>
+
+    ${somenteLeitura ? '' : `
+      <button class="ia-atalho" data-acao="assistente">
+        <span class="ia-atalho-ico">🤖</span>
+        <span class="ia-atalho-corpo"><b>Assistente de IA</b>
+          <span class="small muted">Fale como foi o dia ou anexe a nota fiscal — ele preenche tudo.</span></span>
+        <span class="acc-chevron">›</span>
+      </button>`}
+
+    <!-- ===================== RELATÓRIO DO DIA ===================== -->
+    <details class="accordion" data-secao="rdo"${aberta('rdo', !!(dia.producao_dia || dia.observacoes))}>
+      <summary>
+        <span class="acc-code">RDO-00</span>
+        <span class="acc-title">Relatório do dia</span>
+        <span class="acc-status">${dia.producao_dia ? '✓' : ''}</span>
+        <span class="acc-chevron">›</span>
+      </summary>
+      <div class="acc-body">
+        <label class="field-label" style="margin-top:4px">Serviços executados</label>
+        <textarea id="rdoProducao" rows="5" placeholder="Ex: Executada a concretagem da laje do 2º pavimento..." ${somenteLeitura ? 'disabled' : ''}>${esc(dia.producao_dia || '')}</textarea>
+        <label class="field-label">Clima</label>
+        <input type="text" id="rdoClima" maxlength="200" placeholder="Ex: Ensolarado; chuva forte à tarde" value="${esc(dia.clima || '')}" ${somenteLeitura ? 'disabled' : ''}>
+        <label class="field-label">Observações e ocorrências</label>
+        <textarea id="rdoObservacoes" rows="3" placeholder="Visitas, interferências, pendências, segurança..." ${somenteLeitura ? 'disabled' : ''}>${esc(dia.observacoes || '')}</textarea>
+        ${somenteLeitura ? '' : `
+          <div class="btn-linha">
+            <button class="btn btn-outline" data-acao="redigir-rdo">✨ Redigir com IA</button>
+            <button class="btn btn-brass" data-acao="salvar-rdo">Salvar relatório</button>
+          </div>`}
+      </div>
+    </details>
 
     <!-- ===================== FOTOS ===================== -->
     <details class="accordion" data-secao="fotos"${aberta('fotos', true)}>
@@ -355,6 +387,51 @@ function ligarEventos(raiz, dia) {
         toast('Ponto salvo.', 'ok');
         await recarregarSemana({ manterDia: true });
       } finally { btnSalvarPonto.disabled = false; }
+    };
+  }
+
+  // ---------------- relatório do dia
+  const btnAssistente = raiz.querySelector('[data-acao=assistente]');
+  if (btnAssistente) btnAssistente.onclick = () => abrirAssistente(dia.data);
+
+  const btnSalvarRdo = raiz.querySelector('[data-acao=salvar-rdo]');
+  if (btnSalvarRdo) {
+    btnSalvarRdo.onclick = async () => {
+      btnSalvarRdo.disabled = true;
+      try {
+        await api.put(`/api/dias/${dia.id}`, {
+          producao_dia: raiz.querySelector('#rdoProducao').value,
+          clima: raiz.querySelector('#rdoClima').value,
+          observacoes: raiz.querySelector('#rdoObservacoes').value,
+        });
+        toast('Relatório do dia salvo.', 'ok');
+        await recarregarSemana({ manterDia: true });
+      } finally { btnSalvarRdo.disabled = false; }
+    };
+  }
+
+  const btnRedigir = raiz.querySelector('[data-acao=redigir-rdo]');
+  if (btnRedigir) {
+    btnRedigir.onclick = async () => {
+      const rotulo = btnRedigir.textContent;
+      btnRedigir.disabled = true;
+      btnRedigir.textContent = 'Redigindo...';
+      try {
+        // Leva o que já está digitado: a IA melhora a redação sem perder nada.
+        await api.put(`/api/dias/${dia.id}`, {
+          producao_dia: raiz.querySelector('#rdoProducao').value,
+          clima: raiz.querySelector('#rdoClima').value,
+          observacoes: raiz.querySelector('#rdoObservacoes').value,
+        }, { silencioso: true });
+        const r = await api.post(`/api/dias/${dia.id}/rdo/redigir`, {});
+        raiz.querySelector('#rdoProducao').value = r.producao_dia;
+        if (r.clima) raiz.querySelector('#rdoClima').value = r.clima;
+        raiz.querySelector('#rdoObservacoes').value = r.observacoes;
+        toast('Texto redigido — confira e toque em Salvar relatório.', 'ok');
+      } finally {
+        btnRedigir.disabled = false;
+        btnRedigir.textContent = rotulo;
+      }
     };
   }
 

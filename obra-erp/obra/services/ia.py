@@ -5,20 +5,17 @@ Duas camadas, nesta ordem:
 
 1. **Automático (sempre disponível)** — texto montado por regras a partir dos
    próprios lançamentos. Funciona offline, sem chave, sem custo.
-2. **IA (opcional)** — se `ANTHROPIC_API_KEY` estiver no ambiente, o mesmo
-   conjunto de dados vira um parágrafo redigido em linguagem de relatório.
-   Qualquer falha (sem internet no canteiro, chave inválida, timeout) cai
-   silenciosamente para o resumo automático — o relatório nunca quebra.
+2. **IA (opcional)** — com `GEMINI_API_KEY` (gratuita) ou `ANTHROPIC_API_KEY`
+   no ambiente, o mesmo conjunto de dados vira um parágrafo redigido em
+   linguagem de relatório (ver `ia_provedores`). Qualquer falha (sem internet
+   no canteiro, cota esgotada, chave inválida, timeout) cai silenciosamente
+   para o resumo automático — o relatório nunca quebra.
 """
 
 from __future__ import annotations
 
-import json
-import urllib.error
-import urllib.request
-
-from .. import config
 from ..utils import numero_br, data_br, moeda
+from . import ia_provedores
 
 PROMPT_SISTEMA = (
     "Você é engenheiro civil sênior redigindo o resumo executivo semanal de uma obra "
@@ -91,36 +88,13 @@ def resumo_automatico(d: dict) -> str:
     return " ".join(partes)
 
 
-def _chamar_anthropic(fatos: str) -> str:
-    corpo = json.dumps({
-        "model": config.ANTHROPIC_MODEL,
-        "max_tokens": 400,
-        "system": PROMPT_SISTEMA,
-        "messages": [{"role": "user", "content": f"Dados da semana:\n{fatos}"}],
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        "https://api.anthropic.com/v1/messages",
-        data=corpo,
-        headers={
-            "content-type": "application/json",
-            "x-api-key": config.ANTHROPIC_API_KEY,
-            "anthropic-version": "2023-06-01",
-        },
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=30) as resposta:
-        dados = json.loads(resposta.read().decode("utf-8"))
-    blocos = [b.get("text", "") for b in dados.get("content", []) if b.get("type") == "text"]
-    return "\n".join(t for t in blocos if t).strip()
-
-
 def resumo_semanal(d: dict, usar_ia: bool = True) -> dict:
-    if usar_ia and config.ANTHROPIC_API_KEY:
+    if usar_ia and ia_provedores.disponivel():
         try:
-            texto = _chamar_anthropic(_fatos(d))
+            texto, _provedor = ia_provedores.gerar(PROMPT_SISTEMA, f"Dados da semana:\n{_fatos(d)}",
+                                                   max_tokens=1024)
             if texto:
                 return {"texto": texto, "fonte": "ia"}
-        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, ValueError, KeyError):
+        except ia_provedores.IaIndisponivel:
             pass  # sem internet ou chave inválida: segue com o automático
     return {"texto": resumo_automatico(d), "fonte": "automatico"}
