@@ -114,6 +114,10 @@ ok(c.get('/api/telegram/status').get_json()['conectado'], 'app mostra a conversa
 entregar({'text': f"/start {cod['codigo']}"}, chat=999)
 ok('inválido' in ultima(), 'código vale uma vez só', ultima())
 
+from obra.sql import para_postgres
+ok('RETURNING' not in para_postgres("INSERT INTO telegram_codigos (codigo, usuario_id, expira_em) VALUES (?, ?, ?)"),
+   'Postgres: código de conexão sem RETURNING id (tabela não tem id)')
+
 print('== NOTA + ÁUDIO (VÁRIAS OBRAS) ==')
 n_antes = len(enviadas)
 entregar({'photo': [{'file_id': 'x', 'file_size': 10}, {'file_id': 'nota1', 'file_size': 999}]})
