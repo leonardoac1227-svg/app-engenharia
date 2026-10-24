@@ -51,6 +51,16 @@ export async function renderizar(raiz) {
       </div>
     </div>
 
+    <!-- ---------------- inteligência artificial ---------------- -->
+    ${usuario.papel === 'gestor' ? `
+      <div class="section-head"><h3>Assistente de IA</h3></div>
+      <div class="card">
+        <p class="small muted" style="margin-top:0">Confere se o servidor consegue falar com a IA e mostra o motivo
+        exato quando não consegue.</p>
+        <div id="resultadoIa"></div>
+        <button class="btn btn-outline" data-acao="testar-ia">Testar IA</button>
+      </div>` : ''}
+
     <!-- ---------------- telegram ---------------- -->
     ${usuario.papel !== 'cliente' ? `
       <div class="section-head"><h3>Bot do Telegram</h3></div>
@@ -205,6 +215,27 @@ async function carregarTelegram(raiz) {
 
 function ligarEventos(raiz, { obra, usuarios }) {
   carregarTelegram(raiz);
+
+  const btnTestarIa = raiz.querySelector('[data-acao=testar-ia]');
+  if (btnTestarIa) {
+    btnTestarIa.onclick = async () => {
+      const alvo = raiz.querySelector('#resultadoIa');
+      btnTestarIa.disabled = true;
+      alvo.innerHTML = '<p class="small muted">Testando (pode levar até 1 minuto)...</p>';
+      try {
+        const r = await api.post('/api/assistente/testar', {}, { silencioso: true });
+        alvo.innerHTML = r.provedores.length ? r.provedores.map((p) => `
+          <div class="alerta ${p.ok ? '' : 'perigo'}" style="margin:0 0 10px">
+            <span class="alerta-ico">${p.ok ? '✓' : '✕'}</span>
+            <div><b>${esc(p.provedor)}${p.modelo ? ` · ${esc(p.modelo)}` : ''}</b>
+              <div class="small">${p.ok ? `Respondeu em ${num(p.ms / 1000, 1)} s.` : esc(p.erro)}</div></div>
+          </div>`).join('')
+          : '<div class="alerta aviso" style="margin:0 0 10px"><span class="alerta-ico">!</span><div><b>Nenhuma chave configurada</b><div class="small">Coloque GEMINI_API_KEY no Render.</div></div></div>';
+      } catch (erro) {
+        alvo.innerHTML = `<p class="small" style="color:var(--danger)">${esc(erro.message || 'Falha no teste.')}</p>`;
+      } finally { btnTestarIa.disabled = false; }
+    };
+  }
   const acao = (nome, fn) => {
     const btn = raiz.querySelector(`[data-acao=${nome}]`);
     if (btn) btn.onclick = fn;

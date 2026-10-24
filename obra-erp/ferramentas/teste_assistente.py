@@ -216,6 +216,25 @@ r = perguntar()
 ok(r.status_code == 429 and r.get_json()['codigo'] == 'limite_ia', 'freio por usuário', r.status_code)
 config.IA_LIMITE_HORA = limite
 
+print('== TESTAR IA ==')
+respostas['gemini'] = 'ok'
+r = c.post('/api/assistente/testar', headers=H).get_json()
+ok(r['provedores'][0]['ok'] and r['provedores'][0]['provedor'] == 'Gemini', 'teste de conexão: Gemini responde', r)
+respostas['gemini'] = TimeoutError('timed out')
+r = c.post('/api/assistente/testar', headers=H).get_json()
+ok(not r['provedores'][0]['ok'] and 'tempo esgotado' in r['provedores'][0]['erro'], 'teste mostra tempo esgotado', r)
+ok(m.post('/api/assistente/testar', headers=HM).status_code == 403, 'mestre não roda o teste')
+
+print('== MOTIVOS DE FALHA ==')
+def http(codigo, mensagem):
+    return urllib.error.HTTPError('u', codigo, 'x', {}, io.BytesIO(json.dumps({'error': {'message': mensagem}}).encode()))
+ok('GEMINI_API_KEY inválida' in ia_provedores.descrever_falha(http(400, 'API key not valid. Please pass a valid API key.')),
+   'chave errada é dita com todas as letras')
+ok('não encontrado' in ia_provedores.descrever_falha(http(404, 'models/x is not found')), 'modelo inexistente')
+ok('limite gratuito' in ia_provedores.descrever_falha(http(429, 'quota')), 'cota esgotada')
+ok('DNS' in ia_provedores.descrever_falha(urllib.error.URLError('[Errno -2] Name or service not known')), 'falha de DNS')
+ok('certificado' in ia_provedores.descrever_falha(urllib.error.URLError('[SSL: CERTIFICATE_VERIFY_FAILED]')), 'erro de certificado')
+
 print('== PROVEDORES REAIS (HTTP SIMULADO) ==')
 import obra.services.ia_provedores as ip
 from importlib import reload
@@ -239,6 +258,28 @@ res, fonte = ip.gerar('sis', 'txt', [{'nome': 'n.png', 'mime': 'image/png', 'dad
 ip.urllib.request.urlopen = original
 ok(res == {'a': 1} and fonte == 'gemini', 'Gemini: refaz sem esquema quando o modelo recusa', res)
 ok(corpos[0]['contents'][0]['parts'][0]['inlineData']['mimeType'] == 'image/png', 'Gemini recebe a imagem em base64')
+
+corpos.clear()
+def urlopen_g3(req, timeout=0):
+    corpo = json.loads(req.data)
+    corpos.append(corpo)
+    pensar = corpo['generationConfig'].get('thinkingConfig') or {}
+    if 'thinkingLevel' in pensar:
+        raise urllib.error.HTTPError(req.full_url, 400, 'x', {},
+                                     io.BytesIO(b'{"error": {"message": "Unknown name thinkingLevel"}}'))
+    return Resp({'candidates': [{'content': {'parts': [{'text': '{"a": 2}'}]}}]})
+ip.urllib.request.urlopen = urlopen_g3
+config.IA_ORDEM = ['gemini']
+res, _ = ip.gerar('sis', 'txt', [], {'type': 'object'}, pensar='minimo')
+ok(res == {'a': 2} and corpos[-1]['generationConfig']['thinkingConfig'] == {'thinkingBudget': 0},
+   'raciocínio: modelo sem thinkingLevel recebe thinkingBudget 0', [c['generationConfig'].get('thinkingConfig') for c in corpos])
+n = len(corpos)
+ip.gerar('sis', 'txt', [], {'type': 'object'}, pensar='minimo')
+ok(len(corpos) == n + 1, 'o parâmetro aceito fica guardado: sem tentativas repetidas', len(corpos) - n)
+ip.gerar('sis', 'txt', [], {'type': 'object'})
+ok(corpos[-1]['generationConfig']['thinkingConfig'] == {'thinkingBudget': 1024}, 'pedido normal usa raciocínio baixo',
+   corpos[-1]['generationConfig'].get('thinkingConfig'))
+ip.urllib.request.urlopen = original
 
 import anthropic
 capturado = {}

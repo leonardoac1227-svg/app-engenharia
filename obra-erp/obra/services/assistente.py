@@ -152,9 +152,19 @@ CAIXA (tipos de despesa) — somente se "pode_financeiro" for true no contexto
   prazo, fatura) — nesse caso preencha vencimento se souber.
 - Nota parcelada: valor = total da nota, parcelas = quantidade (2 a 36), parcela_frequencia =
   "mensal" | "quinzenal" | "semanal", vencimento = data da 1ª parcela.
-- Lendo nota fiscal/cupom/boleto anexado: extraia valor total, número da nota, fornecedor (nome
-  fantasia se houver, senão razão social), itens principais para a descrição, data de emissão
-  (use como "data" se o usuário não disser outra) e vencimento/parcelas do boleto.
+- Lendo nota fiscal/cupom/orçamento/recibo/boleto anexado: extraia valor total, número da nota,
+  fornecedor (nome fantasia se houver, senão razão social), itens principais para a descrição, data de
+  emissão (use como "data" se o usuário não disser outra) e vencimento/parcelas do boleto.
+- O VALOR vem SEMPRE do documento quando há um anexado: use o TOTAL final a pagar (depois de
+  descontos e acréscimos), nunca o subtotal, o preço unitário ou o valor de um item. Leia com atenção
+  foto torta, amassada ou com dedo na frente. Só deixe valor 0 se não houver documento ou se o total
+  estiver ilegível — e nesse caso diga na "resposta" que não conseguiu ler o total.
+- Documento que não é nota fiscal (orçamento, pedido, cupom "não é documento fiscal", recibo): use o
+  número dele em numero_nota com o tipo na frente (ex.: "ORC 31797", "PED 5521").
+- Forma de pagamento escrita no documento: dinheiro, PIX, débito ou crédito à vista = "Pago" (salvo se
+  o usuário disser que pagou do bolso = "Reembolso"); boleto, a prazo, faturado = "Em Aberto".
+- Descrição: junte o que o usuário falou com os itens do documento, com quantidade e unidade
+  (ex.: "2 baldes de aço 10 L Momfort — concretagem de pilares e vigas").
 - Coloque em "anexos" os índices (começando em 0) dos arquivos que são o comprovante daquela despesa.
 - Comprovante de PIX/transferência: valor, ID da transação (E2E/autenticação, sem espaços) em
   numero_nota, recebedor em fornecedor, data do pagamento em "data", status "Pago" (ou "Reembolso" se
@@ -351,7 +361,7 @@ def interpretar(obra_id: int, mensagem: str, referencia: str | None, arquivos: l
 
     bruto, fonte = ia_provedores.gerar(
         PROMPT_SISTEMA, _texto_pedido(mensagem, contexto, arquivos, historico),
-        arquivos, ESQUEMA, max_tokens=8192)
+        arquivos, ESQUEMA, max_tokens=8192, pensar="baixo")
 
     resultado = normalizar(bruto, obra_id, referencia, arquivos, pode_financeiro, pode_cadastrar)
     resultado["fonte"] = fonte
@@ -604,7 +614,7 @@ def ouvir(audios: list[dict], texto_usuario: str, obras: list[dict]) -> dict:
              "texto_do_usuario": texto_usuario or ""}
     bruto, _fonte = ia_provedores.gerar(
         PROMPT_OUVIR, "DADOS (JSON):\n" + json.dumps(dados, ensure_ascii=False), audios,
-        ESQUEMA_OUVIR, max_tokens=4096)
+        ESQUEMA_OUVIR, max_tokens=4096, pensar="minimo")
     bruto = bruto if isinstance(bruto, dict) else {}
     ids = {o["id"] for o in obras}
     obra_id = _inteiro(bruto.get("obra_id"))

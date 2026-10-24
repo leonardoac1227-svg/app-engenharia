@@ -87,6 +87,16 @@ def status():
                     "provedores": ia_provedores.provedores_configurados()})
 
 
+@bp.post("/assistente/testar")
+@login_obrigatorio
+def testar():
+    """Pedido mínimo à IA: diz se ela responde, em quanto tempo, ou o motivo exato da falha."""
+    usuario = exigir_lancamento()
+    if usuario["papel"] != "gestor":
+        raise ApiErro("Somente o gestor testa a conexão da IA.", 403)
+    return jsonify({"provedores": ia_provedores.testar()})
+
+
 @bp.post("/obras/<int:obra_id>/assistente")
 @login_obrigatorio
 def interpretar(obra_id: int):

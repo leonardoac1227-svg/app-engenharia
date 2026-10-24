@@ -31,7 +31,7 @@ from .sql import RLS_POSTGRES, SCHEMA_POSTGRES, alteracoes_postgres, para_postgr
 
 log = logging.getLogger("obra-erp")
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 EH_POSTGRES = config.BACKEND == "postgres"
 
@@ -594,6 +594,7 @@ CREATE TABLE IF NOT EXISTS telegram_chats (
     obra_id INTEGER,
     historico TEXT DEFAULT '[]',
     pendentes TEXT DEFAULT '[]',
+    ocupado_ate TEXT,
     vinculado_em TEXT,
     atualizado_em TEXT,
     FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE CASCADE
@@ -663,6 +664,7 @@ COLUNAS_EXTRAS = [
     ("despesas", "parcela_numero", "INTEGER DEFAULT 0"),
     ("despesas", "parcela_total", "INTEGER DEFAULT 0"),
     ("despesas", "reembolsar_para", "TEXT DEFAULT ''"),
+    ("telegram_chats", "ocupado_ate", "TEXT"),
 ]
 
 # Até a v3.2 cada lançamento tinha um único anexo, guardado direto em

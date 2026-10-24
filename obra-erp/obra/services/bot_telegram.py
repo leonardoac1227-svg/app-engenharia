@@ -39,8 +39,10 @@ log = logging.getLogger(__name__)
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
 ATRASO_LOTE = 3.0            # segundos esperando o resto das fotos do mesmo envio
-VALIDADE_ARQUIVO = timedelta(hours=6)
+VALIDADE_ARQUIVO = timedelta(hours=1)
 VALIDADE_CODIGO = timedelta(minutes=20)
+OCUPADO_POR = timedelta(minutes=4)   # teto de um processamento (IA + gravação)
+ESPERA_MAXIMA = 300                  # segundos esperando a mensagem anterior terminar
 MAX_HISTORICO = 8
 MAX_PENDENTES = 10
 _vistos: dict[int, float] = {}
@@ -308,24 +310,59 @@ def _valor_digitado(texto_msg: str):
     return valor if valor > 0 else None
 
 
+def _ocupar(chat_id: str) -> bool:
+    """Uma mensagem por vez por conversa — vale entre os workers do gunicorn.
+
+    Áudio seguido de texto viravam dois processamentos em paralelo: o primeiro
+    levava os arquivos e o segundo rodava sem eles. Agora o segundo espera o
+    primeiro terminar e, se ele falhar, encontra os arquivos de volta na fila.
+    """
+    agora = datetime.now()
+    cur = executar("""UPDATE telegram_chats SET ocupado_ate = ?
+                       WHERE chat_id = ? AND (ocupado_ate IS NULL OR ocupado_ate < ?)""",
+                   ((agora + OCUPADO_POR).isoformat(timespec="seconds"), chat_id,
+                    agora.isoformat(timespec="seconds")))
+    return bool(cur.rowcount)
+
+
+def _liberar(chat_id: str) -> None:
+    executar("UPDATE telegram_chats SET ocupado_ate = NULL WHERE chat_id = ?", (chat_id,))
+
+
 def processar(app, chat_id: str, texto_msg: str, transcricao: str = "", esperar: bool = True) -> None:
     if esperar and ATRASO_LOTE:
         time.sleep(ATRASO_LOTE)
-    v = vinculo(chat_id)
-    if not v:
+    if not vinculo(chat_id):
         return
 
-    # Resposta curta a uma despesa que ficou sem valor: completa e grava.
-    valor = _valor_digitado(texto_msg)
-    faltando = [p for p in v["pendentes"] if p.get("motivo") == "faltando"]
-    if valor and faltando:
-        pendente = faltando[-1]
-        pendente["acao"]["valor"] = valor
-        _executar_pendente(app, chat_id, v, pendente)
-        return
+    inicio = time.monotonic()
+    avisou_espera = False
+    while not _ocupar(chat_id):
+        if not avisou_espera:
+            telegram_api.enviar(chat_id, "⏳ Recebido. Termino a mensagem anterior e já sigo com esta.")
+            avisou_espera = True
+        if time.monotonic() - inicio >= ESPERA_MAXIMA:
+            telegram_api.enviar(chat_id, "⚠️ A mensagem anterior ainda está sendo processada. "
+                                         "Mande esta de novo daqui a pouco.")
+            return
+        time.sleep(2)
 
-    linhas = _pegar_lote(chat_id)
+    linhas = []
     try:
+        v = vinculo(chat_id)
+        # Resposta curta a uma despesa que ficou sem valor: completa e grava.
+        valor = _valor_digitado(texto_msg)
+        faltando = [p for p in v["pendentes"] if p.get("motivo") == "faltando"]
+        if valor and faltando:
+            pendente = faltando[-1]
+            pendente["acao"]["valor"] = valor
+            _executar_pendente(app, chat_id, v, pendente)
+            return
+
+        linhas = _pegar_lote(chat_id)
+        if not avisou_espera:
+            telegram_api.enviar(chat_id, "⏳ Recebido, analisando"
+                                + (f" ({len(linhas)} arquivo(s))" if linhas else "") + "...")
         _processar_lote(app, chat_id, v, texto_msg, transcricao, linhas)
     except ia_provedores.IaIndisponivel as erro:
         _devolver_lote(linhas)
@@ -333,11 +370,14 @@ def processar(app, chat_id: str, texto_msg: str, transcricao: str = "", esperar:
     except ApiErro as erro:
         _devolver_lote(linhas)
         telegram_api.enviar(chat_id, f"⚠️ {erro.mensagem}")
-    except Exception:
+    except Exception as erro:  # noqa: BLE001 — o usuário sempre fica sabendo
         _devolver_lote(linhas)
         log.exception("Telegram: falha no processamento do chat %s", chat_id)
-        telegram_api.enviar(chat_id, "⚠️ Algo deu errado aqui. Seus arquivos continuam guardados: "
-                                     "tente mandar a instrução de novo.")
+        telegram_api.enviar(chat_id, "⚠️ Algo deu errado aqui "
+                                     f"({type(erro).__name__}: {str(erro)[:120]}). Seus arquivos continuam "
+                                     "guardados: tente mandar a instrução de novo.")
+    finally:
+        _liberar(chat_id)
 
 
 def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str,
@@ -357,8 +397,9 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str
                 "file_id": linha["file_id"]}
         (audios if linha["tipo"] == "audio" else arquivos).append(item)
 
-    obra_id = 0
-    if audios or len(obras) > 1:
+    # Obra escrita na mensagem ("obra O13 ...") dispensa a chamada extra à IA.
+    obra_id = 0 if audios else _obra_citada(texto_msg, obras)
+    if not obra_id and (audios or len(obras) > 1):
         ouvido = assistente.ouvir(audios, texto_msg, obras)
         transcricao = ouvido["transcricao"] or transcricao
         obra_id = ouvido["obra_id"]
@@ -428,6 +469,21 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str
     if resultado.get("avisos"):
         partes.append("\n".join(f"• {a}" for a in resultado["avisos"]))
     telegram_api.enviar(chat_id, "\n\n".join(partes), botoes or None)
+
+
+def _obra_citada(texto_msg: str, obras: list[dict]) -> int:
+    """Obra cujo nome aparece na mensagem como palavra inteira (sem acento, sem caixa)."""
+    alvo = f" {_sem_acento(texto_msg)} "
+    achadas = [o["id"] for o in obras
+               if len(_sem_acento(o["nome"])) >= 2
+               and re.search(rf"(?<![\w]){re.escape(_sem_acento(o['nome']))}(?![\w])", alvo)]
+    return achadas[0] if len(achadas) == 1 else 0
+
+
+def _sem_acento(valor: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", valor or "")
+                   if unicodedata.category(c) != "Mn").lower().strip()
 
 
 def _novo_pendente(acao: dict, arquivos: list[dict], motivo: str) -> dict:

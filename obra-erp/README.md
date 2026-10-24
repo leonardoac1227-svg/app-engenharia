@@ -525,7 +525,7 @@ O que mandar:
 - O bot age como o usuário que conectou a conversa: o mestre de obra lança diário,
   ponto e fotos, mas não despesas. Conversas não conectadas são ignoradas.
 - Áudio precisa do Gemini (`GEMINI_API_KEY`); o Claude não ouve áudio.
-- Se a IA falhar, os arquivos ficam guardados (por 6 horas): basta repetir a instrução.
+- Se a IA falhar, os arquivos ficam guardados (por 1 hora): basta repetir a instrução.
 
 ### Configurar (5 minutos)
 
