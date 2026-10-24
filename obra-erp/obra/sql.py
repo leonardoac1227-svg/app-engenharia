@@ -348,6 +348,7 @@ CREATE TABLE IF NOT EXISTS telegram_chats (
     obra_id BIGINT,
     historico TEXT DEFAULT '[]',
     pendentes TEXT DEFAULT '[]',
+    ocupado_ate TEXT,
     vinculado_em TEXT,
     atualizado_em TEXT
 );

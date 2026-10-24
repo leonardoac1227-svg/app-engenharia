@@ -240,6 +240,41 @@ c.post('/telegram/webhook', json={'update_id': 1, 'message': {'chat': {'id': -1,
        headers={'X-Telegram-Bot-Api-Secret-Token': SEGREDO})
 ok(len(enviadas) == n_msgs, 'mensagens de grupo são ignoradas')
 
+print('== AVISO IMEDIATO E UMA MENSAGEM POR VEZ ==')
+n_msgs = len(enviadas)
+fila_ia[:] = [{'transcricao': '', 'obra_id': OA}, {'resposta': 'Nada a lançar.', 'acoes': []}]
+entregar({'text': 'tudo certo hoje'})
+textos = [m['text'] for m in enviadas[n_msgs:]]
+ok(textos and textos[0].startswith('⏳ Recebido, analisando'), 'avisa que está analisando antes da resposta', textos)
+with app.app_context():
+    ok(um("SELECT ocupado_ate FROM telegram_chats WHERE chat_id = ?", (str(CHAT),))['ocupado_ate'] is None,
+       'conversa liberada depois de processar')
+    executar("UPDATE telegram_chats SET ocupado_ate = '2999-01-01T00:00:00' WHERE chat_id = ?", (str(CHAT),))
+espera = bot_telegram.ESPERA_MAXIMA
+bot_telegram.ESPERA_MAXIMA = 0
+n_msgs = len(enviadas)
+entregar({'text': 'outra coisa'})
+textos = [m['text'] for m in enviadas[n_msgs:]]
+ok(any('Termino a mensagem anterior' in t for t in textos) and 'ainda está sendo processada' in textos[-1],
+   'com outra mensagem em andamento: espera e avisa', textos)
+bot_telegram.ESPERA_MAXIMA = espera
+with app.app_context():
+    executar("UPDATE telegram_chats SET ocupado_ate = '2000-01-01T00:00:00' WHERE chat_id = ?", (str(CHAT),))
+fila_ia[:] = [{'transcricao': '', 'obra_id': OA}, {'resposta': 'Ok.', 'acoes': []}]
+entregar({'text': 'e agora?'})
+ok(ultima().startswith('🏗'), 'trava vencida (processo morto) não bloqueia a conversa', ultima())
+
+print('== ERRO INESPERADO SEMPRE AVISA ==')
+original = bot_telegram._processar_lote
+def explode(*a, **k): raise RuntimeError('banco caiu')
+bot_telegram._processar_lote = explode
+entregar({'text': 'teste'})
+bot_telegram._processar_lote = original
+ok('Algo deu errado' in ultima() and 'banco caiu' in ultima(), 'falha inesperada chega ao chat com o motivo', ultima())
+with app.app_context():
+    ok(um("SELECT ocupado_ate FROM telegram_chats WHERE chat_id = ?", (str(CHAT),))['ocupado_ate'] is None,
+       'conversa liberada mesmo depois da falha')
+
 print('== MESTRE DE OBRA ==')
 c.post('/api/usuarios', json={'nome': 'Mestre', 'email': 'mestre@obra.local', 'senha': 'mestre123',
                               'papel': 'mestre', 'obras': [OA]}, headers=H)

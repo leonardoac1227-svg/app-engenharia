@@ -22,9 +22,11 @@ biblioteca padrão e o SDK `anthropic` só é importado se a chave existir.
 from __future__ import annotations
 
 import base64
+import http.client
 import json
 import logging
 import re
+import time
 import urllib.error
 import urllib.request
 
@@ -33,7 +35,8 @@ from .. import config
 log = logging.getLogger(__name__)
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
-TEMPO_LIMITE = 90  # segundos — nota fiscal em PDF de várias páginas demora
+TEMPO_LIMITE = 75  # segundos — nota fiscal em PDF de várias páginas demora (e o gunicorn corta em 120)
+ERROS_DE_REDE = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
 
 # Formatos que cada provedor lê. O que ficar fora é avisado, não quebra o pedido.
 # Áudio (nota de voz do Telegram, gravação do celular) só o Gemini entende.
@@ -50,6 +53,60 @@ MODELOS_COM_RESERVA = {"claude-opus-5-5", "claude-opus-5", "claude-fable-5-1", "
 
 class IaIndisponivel(Exception):
     """Nenhum provedor respondeu. A mensagem já vem pronta para o usuário."""
+
+
+class FalhaProvedor(Exception):
+    """Falha de um provedor, já com o motivo em português (vai para a tela)."""
+
+    def __init__(self, motivo: str, codigo: int = 0, detalhe: str = ""):
+        super().__init__(motivo)
+        self.codigo = codigo
+        self.detalhe = detalhe
+
+
+def _motivo_rede(erro) -> str:
+    razao = str(getattr(erro, "reason", erro) or erro)
+    if isinstance(erro, TimeoutError) or "timed out" in razao.lower():
+        return f"tempo esgotado ({TEMPO_LIMITE}s sem resposta)"
+    if "CERTIFICATE" in razao.upper():
+        return "erro de certificado SSL"
+    if any(t in razao for t in ("Name or service", "getaddrinfo", "nodename", "Temporary failure in name")):
+        return "endereço não encontrado (DNS)"
+    return razao[:100] or type(erro).__name__
+
+
+def _falha_http(erro: urllib.error.HTTPError) -> FalhaProvedor:
+    """Traduz o erro HTTP do Google, lendo a mensagem que ele manda no corpo."""
+    detalhe = ""
+    try:
+        detalhe = (json.loads(erro.read().decode("utf-8")).get("error") or {}).get("message", "")
+    except Exception:  # noqa: BLE001 — corpo vazio ou não-JSON
+        pass
+    codigo = erro.code
+    baixo = detalhe.lower()
+    if "api key" in baixo or "api_key" in baixo:
+        motivo = "GEMINI_API_KEY inválida — confira a chave no Render"
+    elif codigo == 403:
+        motivo = "chave sem permissão para a API do Gemini"
+    elif codigo == 404:
+        motivo = f"modelo \"{config.GEMINI_MODEL}\" não encontrado (ajuste GEMINI_MODEL)"
+    elif codigo == 429:
+        motivo = "limite gratuito atingido"
+    else:
+        motivo = f"HTTP {codigo}" + (f": {detalhe[:120]}" if detalhe else "")
+    return FalhaProvedor(motivo, codigo, detalhe)
+
+
+def descrever_falha(erro: Exception) -> str:
+    if isinstance(erro, FalhaProvedor):
+        return str(erro)
+    if isinstance(erro, urllib.error.HTTPError):
+        return _falha_http(erro).args[0]
+    if isinstance(erro, json.JSONDecodeError):
+        return "resposta ilegível"
+    if isinstance(erro, ERROS_DE_REDE):
+        return "sem conexão: " + _motivo_rede(erro)
+    return f"indisponível ({type(erro).__name__}: {str(erro)[:100]})"
 
 
 def provedores_configurados() -> list[str]:
@@ -87,15 +144,29 @@ def _chamar_gemini(sistema: str, texto: str, arquivos: list[dict], esquema: dict
             data=json.dumps(dados).encode("utf-8"),
             headers={"content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY},
             method="POST")
-        with urllib.request.urlopen(req, timeout=TEMPO_LIMITE) as resposta:
-            return json.loads(resposta.read().decode("utf-8"))
+        for tentativa in (1, 2):
+            inicio = time.monotonic()
+            try:
+                with urllib.request.urlopen(req, timeout=TEMPO_LIMITE) as resposta:
+                    return json.loads(resposta.read().decode("utf-8"))
+            except urllib.error.HTTPError as erro:
+                raise _falha_http(erro) from erro
+            except ERROS_DE_REDE as erro:
+                # Queda rápida (conexão recusada, DNS momentâneo) merece uma
+                # segunda tentativa; tempo esgotado não — dobraria a espera.
+                if tentativa == 2 or time.monotonic() - inicio > 10:
+                    raise FalhaProvedor("sem conexão: " + _motivo_rede(erro)) from erro
+                log.warning("Gemini: falha de rede (%s), tentando de novo", erro)
+                time.sleep(1.5)
+        raise FalhaProvedor("sem conexão")
 
     try:
         dados = enviar(corpo)
-    except urllib.error.HTTPError as erro:
+    except FalhaProvedor as erro:
         # Versões do modelo que não conhecem o esquema estruturado devolvem 400:
         # o prompt já descreve o formato, então basta pedir JSON sem o esquema.
-        if erro.code != 400 or "responseJsonSchema" not in geracao:
+        if erro.codigo != 400 or "API_KEY" in erro.detalhe.upper().replace(" ", "_") \
+                or "responseJsonSchema" not in geracao:
             raise
         geracao.pop("responseJsonSchema")
         dados = enviar(corpo)
@@ -195,21 +266,29 @@ def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
             if not bruto:
                 raise ValueError("resposta vazia")
             return (_extrair_json(bruto) if esquema is not None else bruto), provedor
-        except urllib.error.HTTPError as erro:
-            detalhe = f"HTTP {erro.code}"
-            if erro.code == 429:
-                detalhe = "limite gratuito atingido"
-            falhas.append(f"{NOMES[provedor]}: {detalhe}")
-            log.warning("IA %s falhou: %s", provedor, detalhe)
-        except json.JSONDecodeError as erro:
-            falhas.append(f"{NOMES[provedor]}: resposta ilegível")
-            log.warning("IA %s devolveu JSON inválido: %s", provedor, erro)
-        except (urllib.error.URLError, TimeoutError) as erro:
-            falhas.append(f"{NOMES[provedor]}: sem conexão")
-            log.warning("IA %s inacessível: %s", provedor, erro)
         except Exception as erro:  # noqa: BLE001 — qualquer falha passa para o próximo
-            falhas.append(f"{NOMES[provedor]}: indisponível")
-            log.warning("IA %s falhou: %s", provedor, erro)
+            motivo = descrever_falha(erro)
+            falhas.append(f"{NOMES[provedor]}: {motivo}")
+            log.warning("IA %s falhou: %s (%r)", provedor, motivo, erro)
 
     raise IaIndisponivel("A IA não respondeu agora (" + "; ".join(falhas) + "). "
-                         "Tente de novo em instantes ou lance pelo formulário.")
+                         "Tente de novo em instantes.")
+
+
+def testar() -> list[dict]:
+    """Pedido mínimo a cada provedor configurado: mostra se responde e quanto demora."""
+    resultados = []
+    for provedor in provedores_configurados():
+        inicio = time.perf_counter()
+        try:
+            resposta = CHAMADAS[provedor]("Responda só com a palavra: ok", "teste de conexão", [], None, 256)
+            resultados.append({"provedor": NOMES[provedor], "ok": True,
+                               "ms": round((time.perf_counter() - inicio) * 1000),
+                               "modelo": config.GEMINI_MODEL if provedor == "gemini" else config.ANTHROPIC_MODEL,
+                               "resposta": (resposta or "")[:40]})
+        except Exception as erro:  # noqa: BLE001
+            resultados.append({"provedor": NOMES[provedor], "ok": False,
+                               "ms": round((time.perf_counter() - inicio) * 1000),
+                               "erro": descrever_falha(erro)})
+            log.warning("Teste da IA %s falhou: %r", provedor, erro)
+    return resultados
