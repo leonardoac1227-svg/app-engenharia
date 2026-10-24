@@ -87,9 +87,10 @@ obra/
     pdf.py              → relatório em PDF (reportlab)
     ia.py               → resumo executivo (regras + IA opcional)
     ia_provedores.py    → Gemini (gratuito) e Claude (reserva paga)
-    assistente.py       → fala/arquivos → lançamentos propostos e RDO por IA
+    acoes.py            → catálogo de tudo que o assistente faz (conferir, gravar, descrever)
+    assistente.py       → fala/arquivos → ações conferidas, numa chamada à IA; RDO por IA
     bot_telegram.py     → bot do Telegram: lote de arquivos, áudio, respostas e botões
-    executor_acoes.py   → grava as ações do bot pelos mesmos endpoints da tela
+    executor_acoes.py   → grava as ações (tela e bot) pelos mesmos endpoints dos formulários
     telegram_api.py     → cliente da API de bots do Telegram
 static/
   css/style.css         → design system (tokens, componentes)
@@ -436,42 +437,47 @@ não vê valor de contrato nem no fechamento.
 
 ## Assistente de IA
 
-Fale (ou escreva) como foi o dia e anexe a nota fiscal: o assistente preenche
-o app sozinho. Fica no Diário (botão **Assistente de IA**) e no botão **+**.
+Fale (ou escreva) e anexe arquivos: o assistente faz no app tudo que você
+pediu. Fica no Diário (botão **Assistente de IA**), no botão **+** e no
+Telegram (ver *Bot do Telegram*). Tela e bot usam o mesmo catálogo de ações
+(`services/acoes.py`) e gravam pelo mesmo caminho.
 
 Exemplo de fala:
 
-> Hoje o João e o Pedro fizeram 8 horas, o Carlos saiu meio-dia porque foi ao
-> médico. Concretamos a laje do 2º pavimento, uns 12 m³. Choveu à tarde.
-> Comprei 20 sacos de cimento na Casa do Construtor, nota 4521, R$ 1.380,
-> paguei do meu bolso. *(e anexa a foto da nota)*
+> Ademir fez 27 metros de reboco de manhã e à tarde arestamento; o Carlos
+> faltou, atestado. Choveu à tarde. Esse cupom é dos 2 baldes para a
+> concretagem dos pilares. *(e anexa a foto do cupom)*
 
-O que ele faz:
+Tudo que o app faz e o assistente também faz:
 
-| Ação | Exemplo do que você diz |
+| Área | O que você pode pedir |
 |---|---|
-| Relatório do dia (RDO) em texto técnico | "concretamos a laje", "choveu à tarde", "o fiscal veio" |
-| Ponto e justificativas | "o João fez 8 horas", "o Carlos faltou, atestado" |
-| Cadastro de profissional novo | "entrou o Marcos, armador" |
-| Despesa (com nota, vencimento, parcelas e o anexo) | "comprei...", "boleto para dia 10", "em 3x" |
-| Leitura de nota, cupom e boleto | anexe a foto ou o PDF: valor, número, fornecedor e vencimento saem dele |
-| Correção de lançamento | "na verdade foram 1.500" |
-| Baixa de pagamento | "paguei a nota 4521" |
-| Exclusão | "apaga o lançamento da areia" (sempre pede um toque de confirmação) |
-| Fotos do andamento | anexe a foto da obra: vira foto do diário, com legenda e ambiente |
+| **Diário (RDO)** | relato do dia em texto técnico, por funcionário, com quantidades e turno; clima; ocorrências |
+| **Ponto** | horas de cada um, meio período, falta com justificativa, "repete o ponto de ontem" |
+| **Equipe** | cadastrar profissional; mudar função, telefone, PIX; desligar da obra |
+| **Fotos** | fotos da obra no dia citado ("relatório fotográfico de ontem"), com legenda e ambiente |
+| **Despesas** | lançar lendo nota, cupom, orçamento, boleto ou PIX (total, número, fornecedor, data, situação); nota parcelada; frete com várias viagens; aluguel recorrente |
+| **Situação e correções** | "está em aberto", "passa para reembolso", "na verdade foram 1.500", "muda para segunda", anexar comprovante a um lançamento |
+| **Pagamentos** | baixa de uma conta ("paguei o boleto da areia"), baixa de todas da semana, pagar a folha |
+| **Aluguéis** | lançar a renovação, prorrogar, encerrar ("devolvi o andaime") |
+| **Semana e obra** | meta e orçamento da semana, fechar a semana; orçamento, previsão e situação da obra |
+| **Relatórios** | PDF da semana (com RDO e fotos), planilha de pagamentos, CSV, zip com notas e fotos |
+| **Perguntas** | "quanto gastei essa semana?", "o que vence?", "quem faltou hoje?" |
+| **Exclusão** | apagar um lançamento |
 
-- **Gravar automaticamente** (ligado por padrão): tudo que estiver completo
-  é gravado na hora. Desligado, os cartões aparecem para conferir e editar antes.
-- O microfone 🎤 usa o ditado do próprio navegador (Chrome no Android, Safari
-  no iPhone). Também dá para usar o microfone do teclado do celular.
-- Tudo passa pelas mesmas regras dos formulários: trava de nota em
-  duplicidade (com "Lançar mesmo assim"), auditoria e permissões. O mestre de
-  obra usa o assistente para diário, ponto e fotos, mas não para o caixa.
+- O valor sai **sempre do total final do documento**; a IA só pergunta quando
+  não há documento ou o total está ilegível.
+- **Gravar automaticamente** (ligado por padrão): o que está completo é gravado
+  na hora. Exclusão, baixa em lote, pagar folha e fechar semana sempre pedem um toque.
+- Uma única ida à IA por mensagem: ela ouve o áudio, descobre a obra, lê os
+  documentos e monta as ações juntas.
+- Tudo passa pelas regras dos formulários: trava de nota em duplicidade (com
+  "Lançar mesmo assim"), auditoria e permissões (o mestre de obra não mexe no caixa).
 - Falou de um dia que ainda não tem semana? O gestor tem a semana criada na hora.
-- No diário, **Relatório do dia → ✨ Redigir com IA** escreve o RDO a partir
-  do que já foi lançado (ponto, fotos, compras). O RDO sai no PDF semanal.
-- O resumo executivo do fechamento também usa a IA quando ela está ligada; sem
-  ela, é montado por regras e nunca quebra.
+- No diário, **Relatório do dia → ✨ Redigir com IA** escreve o RDO a partir do
+  que já foi lançado. O RDO sai no PDF semanal.
+- **Ajustes → Assistente de IA → Testar IA** (ou `/teste` no bot) mostra se cada
+  modelo responde e em quanto tempo, ou o motivo exato da falha.
 
 ### Configurar (5 minutos)
 
@@ -479,12 +485,17 @@ O que ele faz:
    uma conta Google, clique em *Create API key* e copie a chave.
 2. No Render: *Environment* → adicione `GEMINI_API_KEY` com a chave → *Save*.
    O app reinicia sozinho.
-3. **Claude (pago, reserva):** em <https://platform.claude.com/settings/keys>
-   crie uma chave, coloque crédito e adicione `ANTHROPIC_API_KEY` no Render.
-   Ele só é usado quando o Gemini falha ou estoura o limite gratuito.
+3. Opcional — **Claude (pago):** só se quiser uma reserva paga. Em
+   <https://platform.claude.com/settings/keys> crie uma chave, coloque crédito e
+   adicione `ANTHROPIC_API_KEY`. Sem ela o app usa só o Gemini.
    **A assinatura do Claude (Pro/Max) não serve aqui**: a API é cobrada à parte.
-4. Confira em `https://seu-app.onrender.com/health`: o campo `"ia"` mostra
-   `["gemini", "anthropic"]`.
+4. Confira em **Ajustes → Assistente de IA → Testar IA**.
+
+Como o Gemini é usado: primeiro o **Flash-Lite** (o mais rápido da camada
+gratuita); se ele demorar, estourar a cota ou falhar, o **Flash** responde. As
+cotas gratuitas são contadas por modelo, então os dois se completam. O
+raciocínio do modelo fica no mínimo necessário (ler cupom não precisa de
+"pensar" um minuto).
 
 Bom saber: na camada gratuita do Gemini o Google pode usar o conteúdo enviado
 para melhorar os produtos dele. Se as notas fiscais não puderem sair da
@@ -495,7 +506,8 @@ não é usada para treino) ou use `IA_ORDEM=anthropic`.
 |---|---|
 | `GEMINI_API_KEY` | liga o assistente com o Gemini gratuito |
 | `ANTHROPIC_API_KEY` | Claude pago, reserva (ou principal, sem Gemini) |
-| `GEMINI_MODEL` | padrão `gemini-flash-latest` |
+| `GEMINI_MODEL` | principal, padrão `gemini-flash-lite-latest` |
+| `GEMINI_MODELO_RESERVA` | reserva, padrão `gemini-flash-latest` |
 | `ANTHROPIC_MODEL` | padrão `claude-opus-5-5`; `claude-haiku-5-5` sai bem mais barato |
 | `IA_ORDEM` | padrão `gemini,anthropic` |
 | `IA_LIMITE_HORA` | pedidos por usuário por hora, padrão 60 |
@@ -504,28 +516,32 @@ não é usada para treino) ou use `IA_ORDEM=anthropic`.
 
 ## Bot do Telegram
 
-O mesmo assistente de IA, pelo chat do Telegram. Funciona direto no servidor
-(Render): não precisa de computador ligado.
-
-O que mandar:
+O mesmo assistente, pelo chat do Telegram — com as mesmas ações da tabela acima.
+Funciona direto no servidor (Render): não precisa de computador ligado.
 
 | Você manda | O bot faz |
 |---|---|
-| Foto, print ou PDF de **nota fiscal / cupom / boleto** | lê número da nota, valor, fornecedor e vencimento e lança a despesa com o arquivo anexado |
+| Foto, print ou PDF de **nota / cupom / orçamento / boleto** + o que é | lê total, número e fornecedor e lança com o arquivo anexado |
 | **Comprovante de PIX** | lê valor, ID da transação e recebedor; se houver conta em aberto igual, dá baixa nela |
-| **Áudio** "esse material é da obra X, 20 sacos de cimento..." | transcreve, escolhe a obra pela fala e completa a descrição |
-| **Fotos da obra** + "relatório fotográfico de ontem" | anexa as fotos no diário do dia citado |
-| **Áudio do fim do dia** "Ademir fez 27 metros de reboco de manhã e à tarde arestamento..." | monta o relatório técnico do dia por funcionário e lança o ponto |
+| **Áudio** "esse material é da obra O13, 2 baldes para a concretagem" | transcreve, escolhe a obra e lança |
+| **Fotos da obra** + "relatório fotográfico de ontem" | anexa no diário do dia citado |
+| **Áudio do fim do dia** "Ademir fez 27 metros de reboco de manhã..." | relatório técnico por funcionário + ponto |
+| "Me manda o relatório da semana" | devolve o PDF (ou a planilha) como arquivo |
 
-- Mande os arquivos primeiro e depois o áudio ou texto com a instrução (pode ser a
-  legenda da foto). O bot espera alguns segundos para juntar as fotos do mesmo envio.
-- Não deu para saber a obra? Ele pergunta com botões. `/obra` troca a obra padrão.
-- Nota repetida: botão **Lançar mesmo assim**. Exclusão: sempre um botão de confirmação.
-  Faltou o valor: responda só com o número (ex.: `350,00`).
+- Mande os arquivos e depois o áudio ou texto (pode ser a legenda da foto). O bot
+  espera alguns segundos para juntar as fotos do mesmo envio e responde na hora
+  "⏳ Analisando...". Uma mensagem por vez por conversa.
+- Não deu para saber a obra? Pergunta com botões (sem consultar a IA de novo).
+- Nota repetida: **Lançar mesmo assim**. Exclusão, baixa em lote, folha e fechar
+  semana: botão de confirmação. Faltou o valor: responda só com o número.
+- **Se a IA falhar**, o bot diz o motivo e mostra **🔁 Tentar de novo**. Os
+  arquivos ficam presos àquela tentativa (por 12 horas) e nunca se misturam com o
+  próximo envio. Arquivo sem instrução expira em 1 hora.
+- Comandos: `/obra` (obra padrão), `/relatorio` ou `/relatorio planilha`,
+  `/teste` (conexão e velocidade da IA), `/ajuda`, `/desconectar`.
 - O bot age como o usuário que conectou a conversa: o mestre de obra lança diário,
   ponto e fotos, mas não despesas. Conversas não conectadas são ignoradas.
 - Áudio precisa do Gemini (`GEMINI_API_KEY`); o Claude não ouve áudio.
-- Se a IA falhar, os arquivos ficam guardados (por 1 hora): basta repetir a instrução.
 
 ### Configurar (5 minutos)
 

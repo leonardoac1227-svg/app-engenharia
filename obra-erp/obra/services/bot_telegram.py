@@ -1,22 +1,25 @@
 # -*- coding: utf-8 -*-
-"""Bot do Telegram — o assistente de IA no chat do celular.
+"""Bot do Telegram — o assistente da obra no chat do celular.
 
 Fluxo de uma mensagem:
 
-1. **Arquivos** (foto, print, PDF de nota, comprovante de PIX) ficam guardados
-   esperando a instrução. O bot avisa uma vez que recebeu.
-2. **Instrução** (texto, legenda ou áudio) dispara o processamento, depois de
-   alguns segundos — tempo de chegarem as outras fotos do mesmo envio.
-3. Áudios são transcritos e a obra é identificada pela fala (ou fica a obra
-   padrão escolhida com /obra).
-4. O assistente monta as ações e o `Executor` grava tudo pelos endpoints do
-   app, como o usuário vinculado ao chat.
-5. O bot responde o que gravou. Exclusão e nota repetida esperam um toque em
-   botão; despesa sem valor espera o valor na próxima mensagem.
+1. **Arquivos** (foto, print, PDF de nota, comprovante de PIX, áudio) entram na
+   fila da conversa. Foto sozinha recebe um aviso de "recebido".
+2. **Instrução** (texto, legenda ou áudio) fecha o envio: depois de alguns
+   segundos — tempo de chegarem as outras fotos — tudo vai junto para a IA,
+   numa chamada só (ouve o áudio, descobre a obra, lê os documentos).
+3. As ações voltam conferidas e o `Executor` grava pelos endpoints do app,
+   como o usuário vinculado à conversa.
+4. O bot responde o que gravou. Exclusão, baixa em lote e fechar semana pedem
+   botão; nota repetida oferece "Lançar mesmo assim"; despesa sem valor espera
+   o valor; relatório volta como arquivo.
 
-Só conversas vinculadas a um usuário do app são atendidas (código gerado em
-Ajustes → Telegram). O que o bot pode fazer é exatamente o que o perfil desse
-usuário pode fazer na tela.
+Se a IA falhar, os arquivos ficam presos àquela tentativa, com o botão
+"Tentar de novo" — nunca voltam para a fila, onde se misturariam com o
+próximo envio (foi assim que uma nota antiga entrou num lançamento novo).
+
+Só conversas vinculadas a um usuário do app são atendidas, e o bot pode
+exatamente o que o perfil desse usuário pode na tela.
 """
 
 from __future__ import annotations
@@ -31,39 +34,41 @@ import uuid
 from datetime import datetime, timedelta
 
 from ..db import executar, todos, um
-from ..utils import ApiErro, agora_iso, data_br, hoje_iso, moeda, numero, texto
+from ..utils import ApiErro, agora_iso, hoje_iso, moeda, numero
+from . import acoes as catalogo
 from . import assistente, ia_provedores, telegram_api
-from .executor_acoes import ORDEM, ErroAcao, Executor
+from .executor_acoes import ErroAcao, Executor, ordenar
 
 log = logging.getLogger(__name__)
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
 ATRASO_LOTE = 3.0            # segundos esperando o resto das fotos do mesmo envio
-VALIDADE_ARQUIVO = timedelta(hours=1)
+PRAZO_IA = 150               # segundos: no bot não há limite do gunicorn
+VALIDADE_FILA = timedelta(hours=1)        # arquivo esperando instrução
+VALIDADE_TENTATIVA = timedelta(hours=12)  # arquivo de tentativa que falhou (botão "tentar de novo")
 VALIDADE_CODIGO = timedelta(minutes=20)
-OCUPADO_POR = timedelta(minutes=4)   # teto de um processamento (IA + gravação)
+OCUPADO_POR = timedelta(minutes=5)   # teto de um processamento (IA + gravação)
 ESPERA_MAXIMA = 300                  # segundos esperando a mensagem anterior terminar
 MAX_HISTORICO = 8
-MAX_PENDENTES = 10
+MAX_PENDENTES = 12
 _vistos: dict[int, float] = {}
 _trava_vistos = threading.Lock()
 
 MIME_DOCUMENTO = {"application/pdf", "image/jpeg", "image/png", "image/webp", "image/heic", "image/heif"}
-TITULOS = {"diario": "Diário", "ponto": "Ponto", "funcionario": "Cadastro", "despesa": "Despesa",
-           "editar_despesa": "Correção", "pagar_despesa": "Baixa", "excluir_despesa": "Exclusão",
-           "foto": "Fotos"}
 
-AJUDA = """Sou o assistente da obra. Pode mandar do jeito que falaria com um colega:
+AJUDA = """Sou o assistente da obra e faço tudo que o app faz. Fale do jeito que falaria com um colega:
 
-📄 Nota fiscal, cupom, boleto ou comprovante de PIX (foto, print ou PDF) — eu leio número, valor e fornecedor.
-🎙 Áudio dizendo para qual obra é e o que foi comprado: "esse cimento é da obra do Alphaville, 20 sacos CP-II".
-📷 Fotos da obra + "relatório fotográfico de ontem" — anexo no dia certo.
-🗣 Áudio do fim do dia: "Ademir fez 27 metros de reboco de manhã e à tarde arestamento..." — monto o diário e o ponto.
+📄 Nota, cupom, orçamento, boleto ou comprovante de PIX (foto, print ou PDF) — leio número, total e fornecedor e lanço.
+🎙 Áudio: "esse material é da obra O13, 2 baldes para a concretagem".
+📷 Fotos + "relatório fotográfico de ontem" — anexo no dia certo.
+🗣 Fim do dia: "Ademir fez 27 metros de reboco de manhã e à tarde arestamento; o Carlos faltou, atestado" — monto o diário e o ponto.
+💰 "Essa nota está em aberto", "passa para reembolso", "paguei o boleto da areia", "frete de 3 viagens"...
+👷 "Cadastra o Marcos, armador", "o João saiu da obra".
+📊 "Me manda o relatório da semana", "quanto gastei essa semana?"
 
-Mande os arquivos primeiro e depois o áudio ou texto com a instrução.
+Mande os arquivos primeiro e depois o áudio ou texto (pode ser a legenda da foto).
 
-/obra — escolher a obra padrão
-/ajuda — esta mensagem"""
+/obra — obra padrão · /relatorio — PDF da semana · /teste — testar a IA · /ajuda"""
 
 
 # ---------------------------------------------------------------- vínculo
@@ -117,14 +122,16 @@ def _vincular(chat_id: str, codigo: str) -> str:
 
 def obras_do_usuario(usuario_id: int, papel: str) -> list[dict]:
     if papel == "gestor":
-        linhas = todos("""SELECT id, nome, cliente, endereco FROM obras
-                           WHERE arquivada = 0 ORDER BY nome""")
+        linhas = todos("SELECT id, nome, cliente, endereco FROM obras WHERE arquivada = 0 ORDER BY nome")
     else:
         linhas = todos("""SELECT o.id, o.nome, o.cliente, o.endereco FROM obras o
                             JOIN usuario_obras uo ON uo.obra_id = o.id
-                           WHERE uo.usuario_id = ? AND o.arquivada = 0 ORDER BY o.nome""",
-                       (usuario_id,))
+                           WHERE uo.usuario_id = ? AND o.arquivada = 0 ORDER BY o.nome""", (usuario_id,))
     return [dict(l) for l in linhas]
+
+
+def _perfil(v: dict) -> tuple[bool, bool]:
+    return v["papel"] == "gestor", v["papel"] == "gestor"
 
 
 # ---------------------------------------------------------------- entrada
@@ -171,7 +178,6 @@ def _arquivo_da_mensagem(msg: dict):
         if mime in MIME_DOCUMENTO or mime in ia_provedores.MIME_AUDIO:
             tipo = "audio" if mime.startswith("audio/") else "documento"
             return d["file_id"], tipo, mime, d.get("file_name") or "arquivo"
-        return None
     return None
 
 
@@ -193,8 +199,7 @@ def receber(app, update: dict) -> None:
         _em_segundo_plano(app, tratar_comando, chat_id, texto_msg)
         return
 
-    v = vinculo(chat_id)
-    if not v:
+    if not vinculo(chat_id):
         telegram_api.enviar(chat_id, "Este bot é privado. No app, abra Ajustes → Bot do Telegram, "
                                      "toque em Conectar e envie aqui o código: /start CÓDIGO")
         return
@@ -216,8 +221,8 @@ def receber(app, update: dict) -> None:
     soltos = um("SELECT COUNT(*) AS n FROM telegram_arquivos WHERE chat_id = ? AND lote = ''",
                 (chat_id,))["n"]
     if soltos == 1:
-        telegram_api.enviar(chat_id, "📎 Recebido. Pode mandar mais arquivos; depois envie um áudio ou "
-                                     "texto dizendo o que fazer (obra, dia, materiais...).")
+        telegram_api.enviar(chat_id, "📎 Recebido. Pode mandar mais; depois envie um áudio ou texto "
+                                     "dizendo o que fazer (obra, dia, materiais...).")
 
 
 # ---------------------------------------------------------------- comandos
@@ -246,6 +251,10 @@ def tratar_comando(app, chat_id: str, comando: str) -> None:
         telegram_api.enviar(chat_id, AJUDA)
     elif nome == "/obra":
         _comando_obra(app, chat_id, v, argumento)
+    elif nome == "/teste":
+        _comando_teste(chat_id)
+    elif nome == "/relatorio":
+        _comando_relatorio(app, chat_id, v, argumento)
     elif nome == "/desconectar":
         executar("DELETE FROM telegram_chats WHERE chat_id = ?", (chat_id,))
         telegram_api.enviar(chat_id, "Conversa desconectada do app.")
@@ -253,70 +262,80 @@ def tratar_comando(app, chat_id: str, comando: str) -> None:
         telegram_api.enviar(chat_id, "Comando desconhecido. Use /ajuda.")
 
 
+def _comando_teste(chat_id: str) -> None:
+    telegram_api.enviar(chat_id, "⏳ Testando a IA...")
+    resultados = ia_provedores.testar()
+    if not resultados:
+        telegram_api.enviar(chat_id, "⚠️ Nenhuma chave de IA configurada no servidor (GEMINI_API_KEY).")
+        return
+    linhas = [("✅" if r["ok"] else "❌") + f" {r['provedor']} · {r['modelo']}: "
+              + (f"respondeu em {r['ms'] / 1000:.1f}s" if r["ok"] else r["erro"]) for r in resultados]
+    telegram_api.enviar(chat_id, "Teste da IA:\n" + "\n".join(linhas))
+
+
 def _comando_obra(app, chat_id: str, v: dict, argumento: str) -> None:
     obras = obras_do_usuario(v["usuario_id"], v["papel"])
     if not obras:
         telegram_api.enviar(chat_id, "Você ainda não tem obras no app.")
         return
-    escolhida = next((o for o in obras if str(o["id"]) == argumento), None)
+    escolhida = next((o for o in obras if str(o["id"]) == argumento
+                      or catalogo.sem_acento(o["nome"]) == catalogo.sem_acento(argumento)), None)
     if not escolhida:
         atual = next((o["nome"] for o in obras if o["id"] == v["obra_id"]), "nenhuma")
         botoes = [[{"text": o["nome"][:60], "callback_data": f"obra:{o['id']}"}] for o in obras[:20]]
         telegram_api.enviar(chat_id, f"Obra padrão atual: {atual}.\nEscolha outra:", botoes)
         return
-    _definir_obra(app, chat_id, v, escolhida)
+    _salvar(chat_id, obra_id=escolhida["id"])
+    telegram_api.enviar(chat_id, f"🏗 Obra padrão: {escolhida['nome']}.")
 
 
-def _definir_obra(app, chat_id: str, v: dict, obra: dict) -> None:
-    aguardando = next((p for p in v["pendentes"] if p.get("motivo") == "obra"), None)
-    pendentes = [p for p in v["pendentes"] if p.get("motivo") != "obra"]
-    _salvar(chat_id, obra_id=obra["id"], pendentes=pendentes)
-    telegram_api.enviar(chat_id, f"🏗 Obra padrão: {obra['nome']}.")
-    if aguardando:
-        processar(app, chat_id, aguardando.get("texto", ""), transcricao=aguardando.get("transcricao", ""),
-                  esperar=False)
+def _comando_relatorio(app, chat_id: str, v: dict, argumento: str) -> None:
+    obras = obras_do_usuario(v["usuario_id"], v["papel"])
+    obra_id = v["obra_id"] if any(o["id"] == v["obra_id"] for o in obras) else \
+        (obras[0]["id"] if len(obras) == 1 else 0)
+    if not obra_id:
+        telegram_api.enviar(chat_id, "Escolha a obra primeiro com /obra.")
+        return
+    acao = {"tipo": "relatorio", "dados": {"data": hoje_iso(), "formato": argumento or "pdf"}}
+    pf, pg = _perfil(v)
+    conferidas, avisos = catalogo.normalizar([acao], catalogo.Contexto(obra_id, hoje_iso(), pf, pg))
+    if not conferidas:
+        telegram_api.enviar(chat_id, "⚠️ " + (avisos[0] if avisos else "Não foi possível gerar o relatório."))
+        return
+    try:
+        _executar(app, chat_id, v, conferidas[0], [], obra_id)
+    except ErroAcao as erro:
+        telegram_api.enviar(chat_id, f"⚠️ {erro.mensagem}")
 
 
-# ---------------------------------------------------------------- processamento
+# ---------------------------------------------------------------- fila e trava
 
-def _pegar_lote(chat_id: str) -> list[dict]:
-    lote = uuid.uuid4().hex
-    limite = (datetime.now() - VALIDADE_ARQUIVO).isoformat(timespec="seconds")
+def _limpar_fila(chat_id: str) -> None:
+    agora = datetime.now()
     executar("DELETE FROM telegram_arquivos WHERE chat_id = ? AND lote = '' AND criado_em < ?",
-             (chat_id, limite))
+             (chat_id, (agora - VALIDADE_FILA).isoformat(timespec="seconds")))
+    executar("DELETE FROM telegram_arquivos WHERE chat_id = ? AND lote <> '' AND criado_em < ?",
+             (chat_id, (agora - VALIDADE_TENTATIVA).isoformat(timespec="seconds")))
+
+
+def _pegar_fila(chat_id: str) -> str:
+    _limpar_fila(chat_id)
+    lote = uuid.uuid4().hex
     executar("UPDATE telegram_arquivos SET lote = ? WHERE chat_id = ? AND lote = ''", (lote, chat_id))
+    return lote
+
+
+def _arquivos_do_lote(lote: str) -> list[dict]:
     return [dict(l) for l in todos(
         "SELECT id, file_id, tipo, mime, nome FROM telegram_arquivos WHERE lote = ? ORDER BY id", (lote,))]
 
 
-def _devolver_lote(linhas: list[dict]) -> None:
-    """Falhou? Os arquivos voltam para a fila: ninguém precisa reenviar a nota."""
-    for linha in linhas:
-        executar("UPDATE telegram_arquivos SET lote = '' WHERE id = ?", (linha["id"],))
-
-
-def _encerrar_lote(linhas: list[dict]) -> None:
-    for linha in linhas:
-        executar("DELETE FROM telegram_arquivos WHERE id = ?", (linha["id"],))
-
-
-def _valor_digitado(texto_msg: str):
-    if not re.fullmatch(r"\s*(r\$)?\s*[\d.,]+\s*(reais)?\s*", texto_msg or "", re.I):
-        return None
-    try:
-        valor = numero(re.sub(r"(?i)r\$|reais", "", texto_msg), 0)
-    except ApiErro:
-        return None
-    return valor if valor > 0 else None
+def _encerrar_lote(lote: str) -> None:
+    executar("DELETE FROM telegram_arquivos WHERE lote = ?", (lote,))
 
 
 def _ocupar(chat_id: str) -> bool:
-    """Uma mensagem por vez por conversa — vale entre os workers do gunicorn.
-
-    Áudio seguido de texto viravam dois processamentos em paralelo: o primeiro
-    levava os arquivos e o segundo rodava sem eles. Agora o segundo espera o
-    primeiro terminar e, se ele falhar, encontra os arquivos de volta na fila.
-    """
+    """Uma mensagem por vez por conversa — vale entre os workers do gunicorn."""
     agora = datetime.now()
     cur = executar("""UPDATE telegram_chats SET ocupado_ate = ?
                        WHERE chat_id = ? AND (ocupado_ate IS NULL OR ocupado_ate < ?)""",
@@ -329,59 +348,82 @@ def _liberar(chat_id: str) -> None:
     executar("UPDATE telegram_chats SET ocupado_ate = NULL WHERE chat_id = ?", (chat_id,))
 
 
-def processar(app, chat_id: str, texto_msg: str, transcricao: str = "", esperar: bool = True) -> None:
+def _valor_digitado(texto_msg: str):
+    if not re.fullmatch(r"\s*(r\$)?\s*[\d.,]+\s*(reais)?\s*", texto_msg or "", re.I):
+        return None
+    try:
+        valor = numero(re.sub(r"(?i)r\$|reais", "", texto_msg), 0)
+    except ApiErro:
+        return None
+    return valor if valor > 0 else None
+
+
+def _novo_pendente(v: dict, motivo: str, **dados) -> dict:
+    pendente = {"id": uuid.uuid4().hex[:10], "motivo": motivo, **dados}
+    v["pendentes"] = (v["pendentes"] + [pendente])[-MAX_PENDENTES:]
+    return pendente
+
+
+def _arquivos_para_pendente(acao: dict, arquivos: list[dict]) -> tuple[dict, list[dict]]:
+    """Guarda a ação para depois, com os arquivos referenciados pelo id do Telegram."""
+    usados = sorted(set(acao["dados"].get("anexos") or []))
+    copia = json.loads(json.dumps(acao, default=str))
+    if usados:
+        copia["dados"]["anexos"] = list(range(len(usados)))
+    return copia, [{k: arquivos[i][k] for k in ("file_id", "mime", "nome")} for i in usados if i < len(arquivos)]
+
+
+# ---------------------------------------------------------------- processamento
+
+def processar(app, chat_id: str, texto_msg: str, lote: str = "", esperar: bool = True) -> None:
     if esperar and ATRASO_LOTE:
         time.sleep(ATRASO_LOTE)
     if not vinculo(chat_id):
         return
 
     inicio = time.monotonic()
-    avisou_espera = False
+    avisou = False
     while not _ocupar(chat_id):
-        if not avisou_espera:
+        if not avisou:
             telegram_api.enviar(chat_id, "⏳ Recebido. Termino a mensagem anterior e já sigo com esta.")
-            avisou_espera = True
+            avisou = True
         if time.monotonic() - inicio >= ESPERA_MAXIMA:
             telegram_api.enviar(chat_id, "⚠️ A mensagem anterior ainda está sendo processada. "
                                          "Mande esta de novo daqui a pouco.")
             return
         time.sleep(2)
 
-    linhas = []
     try:
         v = vinculo(chat_id)
-        # Resposta curta a uma despesa que ficou sem valor: completa e grava.
         valor = _valor_digitado(texto_msg)
         faltando = [p for p in v["pendentes"] if p.get("motivo") == "faltando"]
-        if valor and faltando:
+        if valor and faltando and not lote:
             pendente = faltando[-1]
-            pendente["acao"]["valor"] = valor
-            _executar_pendente(app, chat_id, v, pendente)
+            pendente["acao"]["dados"]["valor"] = valor
+            pendente["acao"]["dados"].pop("faltando", None)
+            _resolver_pendente(app, chat_id, v, pendente)
             return
-
-        linhas = _pegar_lote(chat_id)
-        if not avisou_espera:
-            telegram_api.enviar(chat_id, "⏳ Recebido, analisando"
-                                + (f" ({len(linhas)} arquivo(s))" if linhas else "") + "...")
-        _processar_lote(app, chat_id, v, texto_msg, transcricao, linhas)
-    except ia_provedores.IaIndisponivel as erro:
-        _devolver_lote(linhas)
-        telegram_api.enviar(chat_id, f"⚠️ {erro}")
-    except ApiErro as erro:
-        _devolver_lote(linhas)
-        telegram_api.enviar(chat_id, f"⚠️ {erro.mensagem}")
+        lote = lote or _pegar_fila(chat_id)
+        _processar_lote(app, chat_id, v, texto_msg, lote, avisou)
     except Exception as erro:  # noqa: BLE001 — o usuário sempre fica sabendo
-        _devolver_lote(linhas)
-        log.exception("Telegram: falha no processamento do chat %s", chat_id)
-        telegram_api.enviar(chat_id, "⚠️ Algo deu errado aqui "
-                                     f"({type(erro).__name__}: {str(erro)[:120]}). Seus arquivos continuam "
-                                     "guardados: tente mandar a instrução de novo.")
+        esperado = isinstance(erro, (ia_provedores.IaIndisponivel, telegram_api.ErroTelegram, ApiErro))
+        if esperado:
+            log.warning("Telegram %s: %s", chat_id, erro)
+        else:
+            log.exception("Telegram: falha no processamento do chat %s", chat_id)
+        motivo = erro.mensagem if isinstance(erro, ApiErro) else \
+            (str(erro) if esperado else f"{type(erro).__name__}: {str(erro)[:150]}")
+        v = vinculo(chat_id) or {"pendentes": []}
+        tentativa = _novo_pendente(v, "repetir", lote=lote, texto=texto_msg)
+        _salvar(chat_id, pendentes=v["pendentes"])
+        n = len(_arquivos_do_lote(lote)) if lote else 0
+        telegram_api.enviar(chat_id, f"⚠️ {motivo}" + (f"\n\n{n} arquivo(s) guardado(s) para esta tentativa." if n else ""),
+                            [[{"text": "🔁 Tentar de novo", "callback_data": f"re:{tentativa['id']}"}]])
     finally:
         _liberar(chat_id)
 
 
-def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str,
-                    linhas: list[dict]) -> None:
+def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_avisou: bool) -> None:
     from ..blueprints.assistente import _conferir_limite
     _conferir_limite(v["usuario_id"])
 
@@ -390,125 +432,121 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str
         telegram_api.enviar(chat_id, "Você ainda não tem obras no app.")
         return
 
+    linhas = _arquivos_do_lote(lote)
+    if not ja_avisou:
+        telegram_api.enviar(chat_id, "⏳ Analisando" + (f" {len(linhas)} arquivo(s)" if linhas else "") + "...")
     telegram_api.digitando(chat_id)
-    arquivos, audios = [], []
-    for linha in linhas:
-        item = {"nome": linha["nome"], "mime": linha["mime"], "dados": telegram_api.baixar(linha["file_id"]),
-                "file_id": linha["file_id"]}
-        (audios if linha["tipo"] == "audio" else arquivos).append(item)
+    arquivos = [{"nome": l["nome"], "mime": l["mime"], "dados": telegram_api.baixar(l["file_id"]),
+                 "file_id": l["file_id"]} for l in linhas]
 
-    # Obra escrita na mensagem ("obra O13 ...") dispensa a chamada extra à IA.
-    obra_id = 0 if audios else _obra_citada(texto_msg, obras)
-    if not obra_id and (audios or len(obras) > 1):
-        ouvido = assistente.ouvir(audios, texto_msg, obras)
-        transcricao = ouvido["transcricao"] or transcricao
-        obra_id = ouvido["obra_id"]
-    ids = {o["id"] for o in obras}
-    if not obra_id:
-        obra_id = v["obra_id"] if v["obra_id"] in ids else (obras[0]["id"] if len(obras) == 1 else 0)
+    pf, pg = _perfil(v)
+    inicio = time.monotonic()
+    resultado = assistente.interpretar(
+        obras, texto_msg, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
+        obra_padrao=v["obra_id"] or 0, prazo=PRAZO_IA)
+    log.info("Telegram %s: IA em %.1fs (%s %s)", chat_id, time.monotonic() - inicio,
+             resultado["fonte"], resultado["modelo"])
 
-    if not obra_id:
-        _devolver_lote(linhas)
-        pendentes = [p for p in v["pendentes"] if p.get("motivo") != "obra"]
-        pendentes.append({"motivo": "obra", "texto": texto_msg, "transcricao": transcricao})
-        _salvar(chat_id, pendentes=pendentes[-MAX_PENDENTES:])
-        botoes = [[{"text": o["nome"][:60], "callback_data": f"obra:{o['id']}"}] for o in obras[:20]]
-        cabeca = f"🎙 Entendi: {transcricao[:600]}\n\n" if transcricao else ""
+    if resultado["precisa_obra"]:
+        acoes_guardadas = [{"bruta": a} for a in resultado["acoes_sem_obra"]]
+        pendente = _novo_pendente(v, "obra", lote=lote, acoes=acoes_guardadas,
+                                  arquivos=[{k: a[k] for k in ("file_id", "mime", "nome")} for a in arquivos],
+                                  transcricao=resultado["transcricao"], resposta=resultado["resposta"])
+        _salvar(chat_id, pendentes=v["pendentes"])
+        botoes = [[{"text": o["nome"][:60], "callback_data": f"ob:{pendente['id']}:{o['id']}"}] for o in obras[:20]]
+        cabeca = f"🎙 Entendi: {resultado['transcricao'][:700]}\n\n" if resultado["transcricao"] else ""
         telegram_api.enviar(chat_id, cabeca + "Para qual obra é isso?", botoes)
         return
 
-    obra = next(o for o in obras if o["id"] == obra_id)
-    mensagem = "\n".join(t for t in (texto_msg, f"(áudio) {transcricao}" if transcricao else "") if t)
-    pode_financeiro = v["papel"] == "gestor"
-    resultado = assistente.interpretar(
-        obra_id, mensagem, hoje_iso(), arquivos, v["historico"],
-        pode_financeiro=pode_financeiro, pode_cadastrar=v["papel"] == "gestor")
+    obra_id = resultado["obra_id"] or (v["obra_id"] or 0)
+    _finalizar(app, chat_id, v, resultado, arquivos, obra_id, texto_msg)
+    _encerrar_lote(lote)
 
-    executor = Executor(app, v["usuario_id"], obra_id)
-    linhas_resposta, pendentes, botoes = [], [p for p in v["pendentes"] if p.get("motivo") != "obra"], []
-    for acao in sorted(resultado["acoes"], key=lambda a: ORDEM.index(a["tipo"])):
-        if acao.get("requer_confirmacao") or acao.get("faltando"):
-            pendente = _novo_pendente(acao, arquivos, "exclusao" if acao.get("requer_confirmacao") else "faltando")
-            pendentes.append(pendente)
-            if pendente["motivo"] == "exclusao":
-                atual = acao.get("despesa_atual") or {}
-                linhas_resposta.append(f"🗑 Excluir \"{atual.get('descricao')}\" ({moeda(atual.get('valor'))})? "
-                                       "Confirme no botão.")
-                botoes.append([{"text": "Confirmar exclusão", "callback_data": f"ok:{pendente['id']}"},
+
+def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict], obra_id: int,
+               texto_msg: str) -> None:
+    """Grava as ações, guarda o que espera decisão e responde."""
+    linhas, botoes = [], []
+    for acao in ordenar(resultado["acoes"]):
+        alvo = acao.get("obra_id") or obra_id
+        if acao["confirmar"] or acao["dados"].get("faltando"):
+            copia, refs = _arquivos_para_pendente(acao, arquivos)
+            motivo = "faltando" if acao["dados"].get("faltando") else "confirmar"
+            pendente = _novo_pendente(v, motivo, acao=copia, arquivos=refs, obra_id=alvo)
+            if motivo == "confirmar":
+                linhas.append(f"❔ {acao['descricao']} — confirme no botão.")
+                botoes.append([{"text": f"Confirmar: {acao['titulo']}"[:60], "callback_data": f"ok:{pendente['id']}"},
                                {"text": "Cancelar", "callback_data": f"no:{pendente['id']}"}])
             else:
-                linhas_resposta.append(f"❓ {_descrever(acao)} — faltou {' e '.join(acao['faltando'])}. "
-                                       "Responda só com o valor (ex.: 350,00).")
+                linhas.append(f"❓ {acao['descricao']} — faltou {' e '.join(acao['dados']['faltando'])}. "
+                              "Responda só com o valor (ex.: 350,00).")
             continue
         try:
-            executor.gravar(acao, arquivos)
-            linhas_resposta.append("✅ " + _descrever(acao))
+            _executar(app, chat_id, v, acao, arquivos, alvo)
+            linhas.append("✅ " + acao["descricao"])
         except ErroAcao as erro:
             if erro.codigo == "nota_duplicada":
-                pendente = _novo_pendente(acao, arquivos, "duplicada")
-                pendentes.append(pendente)
+                copia, refs = _arquivos_para_pendente(acao, arquivos)
+                pendente = _novo_pendente(v, "duplicada", acao=copia, arquivos=refs, obra_id=alvo)
                 botoes.append([{"text": "Lançar mesmo assim", "callback_data": f"ok:{pendente['id']}"},
                                {"text": "Descartar", "callback_data": f"no:{pendente['id']}"}])
-            linhas_resposta.append(f"⚠️ {TITULOS.get(acao['tipo'], acao['tipo'])}: {erro.mensagem}")
+            linhas.append(f"⚠️ {acao['titulo']}: {erro.mensagem}")
 
-    _encerrar_lote(linhas)
-    gravados = [l[2:] for l in linhas_resposta if l.startswith("✅")]
+    gravados = [l[2:] for l in linhas if l.startswith("✅")]
     historico = (v["historico"] + [
-        {"papel": "usuario", "texto": mensagem or "(arquivos)"},
+        {"papel": "usuario", "texto": " ".join(t for t in (texto_msg, resultado["transcricao"]) if t)
+         or "(arquivos)"},
         {"papel": "assistente", "texto": resultado["resposta"]
          + (f" [gravado: {'; '.join(gravados)}]" if gravados else "")},
     ])[-MAX_HISTORICO:]
-    _salvar(chat_id, obra_id=obra_id, historico=historico, pendentes=pendentes[-MAX_PENDENTES:])
+    _salvar(chat_id, obra_id=obra_id or None, historico=historico, pendentes=v["pendentes"])
 
-    partes = [f"🏗 {obra['nome']}"]
-    if transcricao:
-        partes.append(f"🎙 Entendi: {transcricao[:700]}")
+    obra = um("SELECT nome FROM obras WHERE id = ?", (obra_id,)) if obra_id else None
+    partes = [f"🏗 {obra['nome']}"] if obra else []
+    if resultado["transcricao"]:
+        partes.append(f"🎙 Entendi: {resultado['transcricao'][:700]}")
     partes.append(resultado["resposta"])
-    if linhas_resposta:
-        partes.append("\n".join(linhas_resposta))
+    if linhas:
+        partes.append("\n".join(linhas))
     if resultado.get("avisos"):
         partes.append("\n".join(f"• {a}" for a in resultado["avisos"]))
     telegram_api.enviar(chat_id, "\n\n".join(partes), botoes or None)
 
 
-def _obra_citada(texto_msg: str, obras: list[dict]) -> int:
-    """Obra cujo nome aparece na mensagem como palavra inteira (sem acento, sem caixa)."""
-    alvo = f" {_sem_acento(texto_msg)} "
-    achadas = [o["id"] for o in obras
-               if len(_sem_acento(o["nome"])) >= 2
-               and re.search(rf"(?<![\w]){re.escape(_sem_acento(o['nome']))}(?![\w])", alvo)]
-    return achadas[0] if len(achadas) == 1 else 0
+def _executar(app, chat_id: str, v: dict, acao: dict, arquivos: list[dict], obra_id: int) -> None:
+    executor = Executor(app, v["usuario_id"], obra_id)
+    extra = executor.gravar(acao, arquivos)
+    if extra.get("link"):
+        dados, nome, mime = executor.baixar(extra["link"])
+        telegram_api.enviar_arquivo(chat_id, dados, nome, mime, acao["descricao"])
 
 
-def _sem_acento(valor: str) -> str:
-    import unicodedata
-    return "".join(c for c in unicodedata.normalize("NFD", valor or "")
-                   if unicodedata.category(c) != "Mn").lower().strip()
-
-
-def _novo_pendente(acao: dict, arquivos: list[dict], motivo: str) -> dict:
-    """Guarda a ação para depois, com os arquivos referenciados pelo id do Telegram."""
-    usados = sorted(set(acao.get("anexos") or []))
-    copia = dict(acao)
-    copia["anexos"] = list(range(len(usados)))
-    return {"id": uuid.uuid4().hex[:10], "motivo": motivo, "acao": copia,
-            "arquivos": [{k: arquivos[i][k] for k in ("file_id", "mime", "nome")}
-                         for i in usados if i < len(arquivos)]}
-
-
-def _executar_pendente(app, chat_id: str, v: dict, pendente: dict) -> None:
+def _resolver_pendente(app, chat_id: str, v: dict, pendente: dict) -> None:
     acao = pendente["acao"]
     if pendente["motivo"] == "duplicada":
         acao["confirmar_duplicidade"] = True
     arquivos = [{**a, "dados": telegram_api.baixar(a["file_id"])} for a in pendente.get("arquivos", [])]
-    obra_id = v["obra_id"]
-    restantes = [p for p in v["pendentes"] if p.get("id") != pendente["id"]]
+    v["pendentes"] = [p for p in v["pendentes"] if p.get("id") != pendente["id"]]
     try:
-        Executor(app, v["usuario_id"], obra_id).gravar(acao, arquivos)
-        telegram_api.enviar(chat_id, "✅ " + _descrever(acao))
+        _executar(app, chat_id, v, acao, arquivos, pendente.get("obra_id") or v["obra_id"])
+        telegram_api.enviar(chat_id, "✅ " + catalogo.descrever(acao))
     except ErroAcao as erro:
-        telegram_api.enviar(chat_id, f"⚠️ {TITULOS.get(acao['tipo'], acao['tipo'])}: {erro.mensagem}")
-    _salvar(chat_id, pendentes=restantes)
+        telegram_api.enviar(chat_id, f"⚠️ {acao.get('titulo', '')}: {erro.mensagem}")
+    _salvar(chat_id, pendentes=v["pendentes"])
+
+
+def _escolher_obra(app, chat_id: str, v: dict, pendente: dict, obra_id: int) -> None:
+    """Obra escolhida no botão: confere as ações já interpretadas, sem nova ida à IA."""
+    v["pendentes"] = [p for p in v["pendentes"] if p.get("id") != pendente["id"]]
+    arquivos = [{**a, "dados": telegram_api.baixar(a["file_id"])} for a in pendente.get("arquivos", [])]
+    pf, pg = _perfil(v)
+    conferidas, avisos = catalogo.normalizar([a["bruta"] for a in pendente.get("acoes", [])],
+                                             catalogo.Contexto(obra_id, hoje_iso(), pf, pg, arquivos))
+    resultado = {"acoes": conferidas, "avisos": avisos, "transcricao": "",
+                 "resposta": pendente.get("resposta") or "Ok."}
+    _finalizar(app, chat_id, v, resultado, arquivos, obra_id, pendente.get("transcricao", ""))
+    if pendente.get("lote"):
+        _encerrar_lote(pendente["lote"])
 
 
 def tratar_botao(app, callback: dict) -> None:
@@ -518,59 +556,45 @@ def tratar_botao(app, callback: dict) -> None:
     if not v:
         telegram_api.responder_botao(callback.get("id", ""), "Conversa não conectada.")
         return
-    tipo, _, valor = dados.partition(":")
+    tipo, _, resto = dados.partition(":")
+    obras = obras_do_usuario(v["usuario_id"], v["papel"])
 
     if tipo == "obra":
-        obra = next((o for o in obras_do_usuario(v["usuario_id"], v["papel"]) if str(o["id"]) == valor), None)
+        obra = next((o for o in obras if str(o["id"]) == resto), None)
         telegram_api.responder_botao(callback.get("id", ""), obra["nome"] if obra else "Obra indisponível.")
         if obra:
-            _definir_obra(app, chat_id, v, obra)
+            _salvar(chat_id, obra_id=obra["id"])
+            telegram_api.enviar(chat_id, f"🏗 Obra padrão: {obra['nome']}.")
         return
 
-    pendente = next((p for p in v["pendentes"] if p.get("id") == valor), None)
+    pid, _, extra = resto.partition(":")
+    pendente = next((p for p in v["pendentes"] if p.get("id") == pid), None)
     if not pendente:
         telegram_api.responder_botao(callback.get("id", ""), "Isso já foi resolvido.")
         return
     telegram_api.responder_botao(callback.get("id", ""))
+
     if tipo == "no":
-        _salvar(chat_id, pendentes=[p for p in v["pendentes"] if p.get("id") != valor])
+        _salvar(chat_id, pendentes=[p for p in v["pendentes"] if p.get("id") != pid])
+        if pendente.get("lote"):
+            _encerrar_lote(pendente["lote"])
         telegram_api.enviar(chat_id, "Descartado.")
     elif tipo == "ok":
-        _executar_pendente(app, chat_id, v, pendente)
-
-
-# ---------------------------------------------------------------- texto das respostas
-
-def _descrever(a: dict) -> str:
-    dia = data_br(a.get("data")) if a.get("data") else ""
-    tipo = a["tipo"]
-    if tipo == "diario":
-        return f"Diário de {dia} atualizado"
-    if tipo == "ponto":
-        return f"Ponto de {dia}: " + ", ".join(f"{r['nome']} {r['horas']:g}h" for r in a["registros"])
-    if tipo == "funcionario":
-        return f"Cadastrado: {a['nome']}" + (f" ({a['funcao']})" if a.get("funcao") else "")
-    if tipo == "foto":
-        return f"{len(a['anexos'])} foto(s) no diário de {dia}" + (f" · {a['ambiente']}" if a.get("ambiente") else "")
-    if tipo == "despesa":
-        partes = [a.get("descricao") or "Despesa", moeda(a.get("valor"))]
-        if a.get("fornecedor"):
-            partes.append(a["fornecedor"])
-        if a.get("numero_nota"):
-            partes.append(f"nº {a['numero_nota']}")
-        partes.append(a.get("status_pagamento") or "")
-        if a.get("parcelas"):
-            partes.append(f"{a['parcelas']}x")
-        if a.get("anexos"):
-            partes.append("📎")
-        return "Despesa em " + dia + ": " + " · ".join(p for p in partes if p)
-    atual = a.get("despesa_atual") or {}
-    if tipo == "editar_despesa":
-        mudou = ", ".join(f"{k.replace('_', ' ')} → {moeda(v) if k == 'valor' else v}"
-                          for k, v in (a.get("alteracoes") or {}).items())
-        return f"Corrigido \"{atual.get('descricao')}\": {mudou or 'anexo incluído'}"
-    if tipo == "pagar_despesa":
-        return f"Baixa de \"{atual.get('descricao')}\" ({moeda(atual.get('valor'))}) em {data_br(a.get('pago_em'))}"
-    if tipo == "excluir_despesa":
-        return f"Excluído \"{atual.get('descricao')}\""
-    return texto(a.get("resumo"), 200)
+        if not _ocupar(chat_id):
+            telegram_api.enviar(chat_id, "⏳ Ainda processando a mensagem anterior. Toque de novo em instantes.")
+            return
+        try:
+            _resolver_pendente(app, chat_id, v, pendente)
+        finally:
+            _liberar(chat_id)
+    elif tipo == "ob":
+        obra = next((o for o in obras if str(o["id"]) == extra), None)
+        if obra and _ocupar(chat_id):
+            try:
+                _salvar(chat_id, obra_id=obra["id"])
+                _escolher_obra(app, chat_id, v, pendente, obra["id"])
+            finally:
+                _liberar(chat_id)
+    elif tipo == "re":
+        _salvar(chat_id, pendentes=[p for p in v["pendentes"] if p.get("id") != pid])
+        processar(app, chat_id, pendente.get("texto", ""), lote=pendente.get("lote", ""), esperar=False)

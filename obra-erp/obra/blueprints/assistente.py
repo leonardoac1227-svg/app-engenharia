@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Assistente de IA: interpreta a fala/arquivos e devolve os lançamentos propostos.
+"""Assistente de IA na tela: interpreta a fala/arquivos e grava as ações escolhidas.
 
-Nada é gravado aqui — exceto a semana que falta para uma data (`dia-por-data`),
-criada para que o lançamento tenha onde cair. A gravação de cada ação usa os
-endpoints de sempre (despesas, ponto, fotos, RDO), chamados pela tela.
+`/assistente` só propõe. `/assistente/aplicar` grava o que o usuário
+confirmou, conferindo tudo de novo (o navegador não é confiável) e passando
+pelos endpoints de sempre, via `Executor` — as mesmas travas dos formulários.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ import time
 from collections import defaultdict, deque
 from datetime import date
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 from werkzeug.utils import secure_filename
 
 from .. import config
@@ -22,6 +22,7 @@ from ..db import registrar_auditoria, um
 from ..security import (PODE_FINANCEIRO, exigir_lancamento, garantir_acesso_obra, login_obrigatorio,
                         obra_do_dia)
 from ..services import assistente, ia_provedores
+from ..services.executor_acoes import ErroAcao, Executor, ordenar
 from ..utils import ApiErro, _conteudo_confere, data_iso, extensao, segunda_da_semana, texto
 from .diario import criar_semana_em
 
@@ -31,6 +32,8 @@ MAX_ARQUIVOS = 10
 MIME_POR_EXTENSAO = {
     "jpg": "image/jpeg", "jpeg": "image/jpeg", "png": "image/png", "webp": "image/webp",
     "heic": "image/heic", "heif": "image/heif", "pdf": "application/pdf",
+    "ogg": "audio/ogg", "oga": "audio/ogg", "opus": "audio/ogg", "mp3": "audio/mpeg", "m4a": "audio/mp4",
+    "wav": "audio/wav", "webm": "audio/webm", "aac": "audio/aac",
 }
 
 # Freio por usuário: protege a cota gratuita do Gemini (e o bolso, no Claude)
@@ -109,17 +112,59 @@ def interpretar(obra_id: int):
     if not mensagem and not arquivos:
         raise ApiErro("Fale, escreva ou anexe algo para o assistente analisar.")
 
+    obra = dict(um("SELECT id, nome, cliente, endereco FROM obras WHERE id = ?", (obra_id,)))
     try:
         resultado = assistente.interpretar(
-            obra_id, mensagem, request.form.get("data_referencia"), arquivos, _historico(),
-            pode_financeiro=usuario["papel"] in PODE_FINANCEIRO,
-            pode_cadastrar=usuario["papel"] == "gestor")
+            [obra], mensagem, request.form.get("data_referencia"), arquivos, _historico(),
+            pode_financeiro=usuario["papel"] in PODE_FINANCEIRO, pode_gestor=usuario["papel"] == "gestor",
+            obra_padrao=obra_id, prazo=100)
     except ia_provedores.IaIndisponivel as erro:
         raise ApiErro(str(erro), 503, "ia_indisponivel")
 
     registrar_auditoria(usuario, "usou_assistente", "obra", obra_id,
-                        f"{len(resultado['acoes'])} ação(ões) · {resultado['fonte']}")
+                        f"{len(resultado['acoes'])} ação(ões) · {resultado['fonte']} {resultado['modelo']}")
+    resultado.pop("acoes_sem_obra", None)
     return jsonify(resultado)
+
+
+@bp.post("/obras/<int:obra_id>/assistente/aplicar")
+@login_obrigatorio
+def aplicar(obra_id: int):
+    """Grava as ações confirmadas na tela. Devolve o resultado de cada uma, na ordem recebida."""
+    garantir_acesso_obra(obra_id)
+    usuario = exigir_lancamento()
+    try:
+        pedidas = json.loads(request.form.get("acoes") or "[]")
+    except ValueError:
+        raise ApiErro("Ações em formato inválido.")
+    if not isinstance(pedidas, list) or not pedidas:
+        raise ApiErro("Nenhuma ação para gravar.")
+    arquivos = _ler_arquivos()
+
+    resultados = []
+    executor = Executor(current_app._get_current_object(), usuario["id"], obra_id)
+    pode_financeiro = usuario["papel"] in PODE_FINANCEIRO
+    # Cadastro antes do ponto, lançamento antes da baixa: grava na ordem do catálogo.
+    fila = [p if isinstance(p, dict) else {} for p in pedidas]
+    sequencia = [x["_i"] for x in ordenar([{"tipo": p.get("tipo", ""), "_i": i} for i, p in enumerate(fila)])]
+    for indice in sequencia:
+        pedida = fila[indice]
+        conferidas, avisos = assistente.reconferir(
+            obra_id, [pedida], arquivos, pode_financeiro, usuario["papel"] == "gestor",
+            request.form.get("data_referencia"))
+        if not conferidas:
+            resultados.append({"indice": indice, "ok": False,
+                               "erro": avisos[0] if avisos else "Nada a gravar nesta ação."})
+            continue
+        acao = conferidas[0]
+        try:
+            extra = executor.gravar(acao, arquivos)
+            resultados.append({"indice": indice, "ok": True, "descricao": acao["descricao"], **extra})
+        except ErroAcao as erro:
+            resultados.append({"indice": indice, "ok": False, "erro": erro.mensagem, "codigo": erro.codigo})
+    registrar_auditoria(usuario, "aplicou_assistente", "obra", obra_id,
+                        f"{sum(r['ok'] for r in resultados)}/{len(resultados)} gravada(s)")
+    return jsonify({"resultados": sorted(resultados, key=lambda r: r["indice"])})
 
 
 @bp.post("/obras/<int:obra_id>/dia-por-data")
