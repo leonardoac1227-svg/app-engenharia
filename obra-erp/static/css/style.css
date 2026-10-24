@@ -1107,3 +1107,5 @@ input[type=file] { padding: 10px; font-size: 13px; color: var(--text-muted); }
   .ia-ponto { grid-template-columns: 1fr 64px; }
   .ia-ponto input[type=text] { grid-column: 1 / -1; }
 }
+.ia-editar { margin-top: 6px; }
+.ia-editar > summary { cursor: pointer; color: var(--primary); font-weight: 600; padding: 4px 0; }

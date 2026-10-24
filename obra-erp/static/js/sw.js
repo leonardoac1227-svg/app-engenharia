@@ -10,29 +10,29 @@
 
    Com network-first, quem está online sempre recebe o código novo, e quem
    está sem sinal no canteiro continua abrindo o app a partir do cache.
-   O VERSAO abaixo deve ser incrementado a cada release: isso troca o nome do
-   cache, muda o sw.js em bytes e força a atualização.
+   O VERSAO abaixo é preenchido pelo servidor com a versão do app a cada
+   deploy: troca o nome do cache, muda o sw.js em bytes e força a atualização.
    ========================================================================== */
 
-const VERSAO = 25;
+const VERSAO = '__VERSAO__';
 const CACHE = `obra-erp-v${VERSAO}`;
 
 const ESTATICOS = [
-  '/static/css/style.css',
-  '/static/js/app.js',
-  '/static/js/api.js',
-  '/static/js/util.js',
-  '/static/js/estado.js',
-  '/static/js/compressao.js',
-  '/static/js/navegacao.js',
-  '/static/js/views/home.js',
-  '/static/js/views/diario.js',
-  '/static/js/views/equipe.js',
-  '/static/js/views/financeiro.js',
-  '/static/js/views/fechamento.js',
-  '/static/js/views/ajustes.js',
-  '/static/js/views/comum.js',
-  '/static/js/views/assistente.js',
+  `/static/v${VERSAO}/css/style.css`,
+  `/static/v${VERSAO}/js/app.js`,
+  `/static/v${VERSAO}/js/api.js`,
+  `/static/v${VERSAO}/js/util.js`,
+  `/static/v${VERSAO}/js/estado.js`,
+  `/static/v${VERSAO}/js/compressao.js`,
+  `/static/v${VERSAO}/js/navegacao.js`,
+  `/static/v${VERSAO}/js/views/home.js`,
+  `/static/v${VERSAO}/js/views/diario.js`,
+  `/static/v${VERSAO}/js/views/equipe.js`,
+  `/static/v${VERSAO}/js/views/financeiro.js`,
+  `/static/v${VERSAO}/js/views/fechamento.js`,
+  `/static/v${VERSAO}/js/views/ajustes.js`,
+  `/static/v${VERSAO}/js/views/comum.js`,
+  `/static/v${VERSAO}/js/views/assistente.js`,
   '/static/img/icone.svg',
 ];
 

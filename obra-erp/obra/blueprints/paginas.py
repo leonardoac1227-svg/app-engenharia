@@ -85,13 +85,35 @@ def arquivo(nome: str):
     return resposta
 
 
+@bp.route("/static/v<versao>/<path:arquivo>")
+def estatico_versionado(versao: str, arquivo: str):
+    """Estáticos com a versão no caminho.
+
+    Os módulos JS se importam por caminho relativo ("./views/ajustes.js").
+    Com a versão só na query do app.js (?v=), os outros módulos tinham sempre o
+    mesmo endereço e ficavam um ano no cache do aparelho: um deploy novo
+    chegava pela metade (foi assim que o botão "Testar IA" não aparecia). Com a
+    versão no caminho, os imports relativos herdam a versão e cada deploy tem
+    endereços novos — e o cache longo continua valendo para o resto.
+    """
+    resposta = send_from_directory(os.path.join(config.BASE_DIR, "static"), arquivo, max_age=31_536_000)
+    resposta.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    return resposta
+
+
 @bp.route("/sw.js")
 def service_worker():
-    """Servido da raiz para que o escopo do PWA cubra o app inteiro."""
-    resposta = send_from_directory(os.path.join(config.BASE_DIR, "static", "js"), "sw.js")
-    resposta.headers["Cache-Control"] = "no-cache"
-    resposta.headers["Content-Type"] = "application/javascript"
-    return resposta
+    """Servido da raiz para que o escopo do PWA cubra o app inteiro.
+
+    A versão do app é escrita dentro do arquivo: muda os bytes do sw.js a cada
+    deploy (o navegador reinstala) e aponta o pré-cache para os endereços novos.
+    """
+    from flask import Response
+    from .. import __version__
+    with open(os.path.join(config.BASE_DIR, "static", "js", "sw.js"), encoding="utf-8") as arquivo:
+        conteudo = arquivo.read().replace("__VERSAO__", __version__)
+    return Response(conteudo, mimetype="application/javascript",
+                    headers={"Cache-Control": "no-cache"})
 
 
 @bp.route("/manifest.webmanifest")

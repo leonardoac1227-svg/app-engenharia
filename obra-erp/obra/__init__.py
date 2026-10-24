@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.7.0"
+__version__ = "3.8.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}

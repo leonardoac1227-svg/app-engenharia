@@ -16,7 +16,8 @@ ADMIN_SENHA     Senha inicial desse usuário (padrão: obra123 — troque no 1º
 ADMIN_NOME      Nome exibido do primeiro usuário.
 GEMINI_API_KEY  Chave gratuita do Google AI Studio. Liga o assistente de IA
                 (relatório diário, leitura de notas fiscais, lançamentos por voz).
-GEMINI_MODEL    Modelo do Gemini (padrão: gemini-flash-latest).
+GEMINI_MODEL    Modelo principal do Gemini (padrão: gemini-flash-lite-latest, o mais rápido).
+GEMINI_MODELO_RESERVA  Modelo usado se o principal demorar ou falhar (padrão: gemini-flash-latest).
 ANTHROPIC_API_KEY  API paga do Claude. Reserva quando o Gemini falha ou estoura o
                 limite gratuito — e principal se não houver chave do Gemini.
 ANTHROPIC_MODEL Modelo do Claude (padrão: claude-opus-5-5).
@@ -96,7 +97,8 @@ ADMIN_NOME = os.environ.get("ADMIN_NOME", "Gestor")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-opus-5-5"
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-latest"
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-lite-latest"
+GEMINI_MODELO_RESERVA = (os.environ.get("GEMINI_MODELO_RESERVA") or "gemini-flash-latest").strip()
 IA_ORDEM = [p.strip().lower() for p in (os.environ.get("IA_ORDEM") or "gemini,anthropic").split(",")
             if p.strip()]
 try:

@@ -13,6 +13,7 @@ import json
 import logging
 import urllib.error
 import urllib.request
+import uuid
 
 from .. import config
 
@@ -85,6 +86,25 @@ def enviar(chat_id, texto: str, botoes: list[list[dict]] | None = None) -> None:
             log.warning("Telegram: falha ao responder %s: %s", chat_id, erro)
 
 
+def enviar_arquivo(chat_id, dados: bytes, nome: str, mime: str, legenda: str = "") -> None:
+    """Manda um arquivo gerado pelo app (PDF, planilha, zip) como documento."""
+    fronteira = uuid.uuid4().hex
+    partes = []
+    for campo, valor in (("chat_id", str(chat_id)), ("caption", legenda[:1000])):
+        partes.append(f"--{fronteira}\r\nContent-Disposition: form-data; name=\"{campo}\"\r\n\r\n"
+                      f"{valor}\r\n".encode("utf-8"))
+    partes.append(f"--{fronteira}\r\nContent-Disposition: form-data; name=\"document\"; "
+                  f"filename=\"{nome}\"\r\nContent-Type: {mime}\r\n\r\n".encode("utf-8") + dados + b"\r\n")
+    partes.append(f"--{fronteira}--\r\n".encode("utf-8"))
+    req = urllib.request.Request(
+        API.format(token=config.TELEGRAM_BOT_TOKEN, metodo="sendDocument"), data=b"".join(partes),
+        headers={"content-type": f"multipart/form-data; boundary={fronteira}"}, method="POST")
+    with urllib.request.urlopen(req, timeout=60) as resposta:
+        corpo = json.loads(resposta.read().decode("utf-8"))
+    if not corpo.get("ok"):
+        raise ErroTelegram(corpo.get("description") or "Falha ao enviar o arquivo.")
+
+
 def digitando(chat_id) -> None:
     try:
         chamar("sendChatAction", chat_id=chat_id, action="typing")
@@ -111,6 +131,8 @@ def ativar_webhook(url_base: str) -> str:
            allowed_updates=["message", "callback_query"], drop_pending_updates=False)
     chamar("setMyCommands", commands=[
         {"command": "obra", "description": "Escolher a obra padrão"},
+        {"command": "relatorio", "description": "PDF da semana (ou: /relatorio planilha)"},
+        {"command": "teste", "description": "Testar a conexão e a velocidade da IA"},
         {"command": "ajuda", "description": "Como usar o bot"},
     ])
     return url
