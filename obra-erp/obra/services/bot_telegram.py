@@ -39,7 +39,7 @@ log = logging.getLogger(__name__)
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
 ATRASO_LOTE = 3.0            # segundos esperando o resto das fotos do mesmo envio
-VALIDADE_ARQUIVO = timedelta(hours=6)
+VALIDADE_ARQUIVO = timedelta(hours=1)
 VALIDADE_CODIGO = timedelta(minutes=20)
 OCUPADO_POR = timedelta(minutes=4)   # teto de um processamento (IA + gravação)
 ESPERA_MAXIMA = 300                  # segundos esperando a mensagem anterior terminar
@@ -397,8 +397,9 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str
                 "file_id": linha["file_id"]}
         (audios if linha["tipo"] == "audio" else arquivos).append(item)
 
-    obra_id = 0
-    if audios or len(obras) > 1:
+    # Obra escrita na mensagem ("obra O13 ...") dispensa a chamada extra à IA.
+    obra_id = 0 if audios else _obra_citada(texto_msg, obras)
+    if not obra_id and (audios or len(obras) > 1):
         ouvido = assistente.ouvir(audios, texto_msg, obras)
         transcricao = ouvido["transcricao"] or transcricao
         obra_id = ouvido["obra_id"]
@@ -468,6 +469,21 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, transcricao: str
     if resultado.get("avisos"):
         partes.append("\n".join(f"• {a}" for a in resultado["avisos"]))
     telegram_api.enviar(chat_id, "\n\n".join(partes), botoes or None)
+
+
+def _obra_citada(texto_msg: str, obras: list[dict]) -> int:
+    """Obra cujo nome aparece na mensagem como palavra inteira (sem acento, sem caixa)."""
+    alvo = f" {_sem_acento(texto_msg)} "
+    achadas = [o["id"] for o in obras
+               if len(_sem_acento(o["nome"])) >= 2
+               and re.search(rf"(?<![\w]){re.escape(_sem_acento(o['nome']))}(?![\w])", alvo)]
+    return achadas[0] if len(achadas) == 1 else 0
+
+
+def _sem_acento(valor: str) -> str:
+    import unicodedata
+    return "".join(c for c in unicodedata.normalize("NFD", valor or "")
+                   if unicodedata.category(c) != "Mn").lower().strip()
 
 
 def _novo_pendente(acao: dict, arquivos: list[dict], motivo: str) -> dict:

@@ -240,6 +240,13 @@ c.post('/telegram/webhook', json={'update_id': 1, 'message': {'chat': {'id': -1,
        headers={'X-Telegram-Bot-Api-Secret-Token': SEGREDO})
 ok(len(enviadas) == n_msgs, 'mensagens de grupo são ignoradas')
 
+print('== OBRA ESCRITA NA MENSAGEM ==')
+n_chamadas = len(chamadas)
+fila_ia[:] = [{'resposta': 'Ok.', 'acoes': []}]
+entregar({'text': 'na obra prédio centro chegou o caminhão de areia'})
+ok(len(chamadas) == n_chamadas + 1 and '🏗 Prédio Centro' in ultima(),
+   'obra citada pelo nome: uma chamada à IA só (sem a etapa de identificar)', ultima())
+
 print('== AVISO IMEDIATO E UMA MENSAGEM POR VEZ ==')
 n_msgs = len(enviadas)
 fila_ia[:] = [{'transcricao': '', 'obra_id': OA}, {'resposta': 'Nada a lançar.', 'acoes': []}]

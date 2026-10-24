@@ -26,6 +26,7 @@ import http.client
 import json
 import logging
 import re
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -120,23 +121,29 @@ def disponivel() -> bool:
 
 # ---------------------------------------------------------------- Gemini
 
+# Quanto o modelo "pensa" antes de responder. Os Gemini 3 vêm com raciocínio
+# alto ligado por padrão: ler um cupom levava mais de um minuto (e estourava o
+# tempo limite). Ler nota, ouvir áudio e montar lançamentos não precisa disso.
+# Cada geração do modelo aceita um parâmetro diferente (thinkingLevel no 3.x,
+# thinkingBudget no 2.5); tentamos na ordem e guardamos o que o modelo aceitou.
+PENSAMENTO = {
+    "minimo": [{"thinkingLevel": "minimal"}, {"thinkingLevel": "low"}, {"thinkingBudget": 0}, None],
+    "baixo": [{"thinkingLevel": "low"}, {"thinkingBudget": 1024}, None],
+}
+_aceito: dict[tuple[str, str], int] = {}
+_local = threading.local()
+
+
+def _modo_pensamento() -> str:
+    return getattr(_local, "pensar", "baixo")
+
+
 def _chamar_gemini(sistema: str, texto: str, arquivos: list[dict], esquema: dict | None,
                    max_tokens: int) -> str:
     partes = [{"inlineData": {"mimeType": a["mime"],
                               "data": base64.b64encode(a["dados"]).decode("ascii")}}
               for a in arquivos if a["mime"] in MIME_GEMINI]
     partes.append({"text": texto})
-
-    geracao = {"maxOutputTokens": max_tokens}
-    if esquema is not None:
-        geracao["responseMimeType"] = "application/json"
-        geracao["responseJsonSchema"] = esquema
-
-    corpo = {
-        "systemInstruction": {"parts": [{"text": sistema}]},
-        "contents": [{"role": "user", "parts": partes}],
-        "generationConfig": geracao,
-    }
 
     def enviar(dados: dict) -> dict:
         req = urllib.request.Request(
@@ -160,16 +167,36 @@ def _chamar_gemini(sistema: str, texto: str, arquivos: list[dict], esquema: dict
                 time.sleep(1.5)
         raise FalhaProvedor("sem conexão")
 
-    try:
-        dados = enviar(corpo)
-    except FalhaProvedor as erro:
-        # Versões do modelo que não conhecem o esquema estruturado devolvem 400:
-        # o prompt já descreve o formato, então basta pedir JSON sem o esquema.
-        if erro.codigo != 400 or "API_KEY" in erro.detalhe.upper().replace(" ", "_") \
-                or "responseJsonSchema" not in geracao:
-            raise
-        geracao.pop("responseJsonSchema")
-        dados = enviar(corpo)
+    modo = _modo_pensamento()
+    variantes = PENSAMENTO.get(modo, PENSAMENTO["baixo"])
+    chave = (config.GEMINI_MODEL, modo)
+    guardado = _aceito.get(chave, 0)
+    # Tentativas em ordem: com esquema estruturado, cada forma de controlar o
+    # raciocínio (começando pela que já deu certo); depois, sem o esquema.
+    tentativas = [(True, i) for i in range(guardado, len(variantes))] if esquema is not None else []
+    tentativas += [(False, i) for i in range(len(variantes))]
+
+    for numero, (com_esquema, indice) in enumerate(tentativas):
+        geracao = {"maxOutputTokens": max_tokens}
+        if variantes[indice] is not None:
+            geracao["thinkingConfig"] = variantes[indice]
+        if esquema is not None:
+            geracao["responseMimeType"] = "application/json"
+            if com_esquema:
+                geracao["responseJsonSchema"] = esquema
+        corpo = {"systemInstruction": {"parts": [{"text": sistema}]},
+                 "contents": [{"role": "user", "parts": partes}],
+                 "generationConfig": geracao}
+        try:
+            dados = enviar(corpo)
+            if com_esquema or esquema is None:
+                _aceito[chave] = indice
+            break
+        except FalhaProvedor as erro:
+            # 400 = o modelo não conhece algum parâmetro: tenta a próxima forma.
+            if erro.codigo != 400 or "API_KEY" in erro.detalhe.upper().replace(" ", "_") \
+                    or numero == len(tentativas) - 1:
+                raise
 
     candidatos = dados.get("candidates") or []
     if not candidatos:
@@ -201,7 +228,7 @@ def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: d
         "max_tokens": max(max_tokens, 16000),
         "system": sistema,
         "messages": [{"role": "user", "content": conteudo}],
-        "output_config": {"effort": "medium"},
+        "output_config": {"effort": "low" if _modo_pensamento() == "minimo" else "medium"},
     }
     if esquema is not None:
         parametros["output_config"]["format"] = {"type": "json_schema", "schema": esquema}
@@ -239,7 +266,8 @@ def _extrair_json(texto: str):
 
 
 def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
-          esquema: dict | None = None, max_tokens: int = 8192) -> tuple[object, str]:
+          esquema: dict | None = None, max_tokens: int = 8192,
+          pensar: str = "baixo") -> tuple[object, str]:
     """Pede uma resposta ao primeiro provedor que funcionar.
 
     `arquivos`: [{"nome", "mime", "dados": bytes}]. Com `esquema`, a resposta
@@ -260,6 +288,7 @@ def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
                                  "Mande a mensagem por texto.")
 
     falhas = []
+    _local.pensar = pensar
     for provedor in provedores:
         try:
             bruto = CHAMADAS[provedor](sistema, texto, arquivos, esquema, max_tokens)
@@ -281,6 +310,7 @@ def testar() -> list[dict]:
     for provedor in provedores_configurados():
         inicio = time.perf_counter()
         try:
+            _local.pensar = "minimo"
             resposta = CHAMADAS[provedor]("Responda só com a palavra: ok", "teste de conexão", [], None, 256)
             resultados.append({"provedor": NOMES[provedor], "ok": True,
                                "ms": round((time.perf_counter() - inicio) * 1000),
