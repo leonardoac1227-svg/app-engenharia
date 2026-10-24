@@ -22,6 +22,10 @@ ANTHROPIC_API_KEY  API paga do Claude. Reserva quando o Gemini falha ou estoura 
 ANTHROPIC_MODEL Modelo do Claude (padrão: claude-opus-5-5).
 IA_ORDEM        Ordem de tentativa dos provedores (padrão: gemini,anthropic).
 IA_LIMITE_HORA  Pedidos ao assistente por usuário, por hora (padrão 60).
+TELEGRAM_BOT_TOKEN  Token do bot criado no @BotFather. Liga o bot do Telegram.
+TELEGRAM_WEBHOOK_SECRET  Segredo do webhook (padrão: derivado da SECRET_KEY).
+PUBLIC_URL      Endereço público do app (no Render vem sozinho em RENDER_EXTERNAL_URL).
+FUSO_HORARIO    Fuso do canteiro (padrão America/Sao_Paulo). Define o que é "hoje".
 MAX_UPLOAD_MB   Tamanho máximo de cada envio (padrão 25 MB).
 REEMBOLSO_PADRAO  Quem recebe o reembolso quando ninguém é informado (padrão: Léo).
 JORNADA_HORAS   Horas de um dia completo de trabalho (padrão 8). Abaixo disso, de
@@ -32,6 +36,14 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
+
+# O servidor do Render roda em UTC: sem isto, um lançamento feito às 21h de
+# Brasília cairia no dia seguinte. O fuso vale para todo o processo.
+FUSO_HORARIO = (os.environ.get("FUSO_HORARIO") or "America/Sao_Paulo").strip()
+if FUSO_HORARIO and hasattr(time, "tzset"):
+    os.environ["TZ"] = FUSO_HORARIO
+    time.tzset()
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -91,6 +103,12 @@ try:
     IA_LIMITE_HORA = max(int(os.environ.get("IA_LIMITE_HORA", "60")), 1)
 except ValueError:
     IA_LIMITE_HORA = 60
+
+# ---------------------------------------------------------------- telegram
+
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_WEBHOOK_SECRET = os.environ.get("TELEGRAM_WEBHOOK_SECRET", "").strip()
+PUBLIC_URL = (os.environ.get("PUBLIC_URL") or os.environ.get("RENDER_EXTERNAL_URL") or "").strip().rstrip("/")
 
 # ---------------------------------------------------------------- banco de dados
 #

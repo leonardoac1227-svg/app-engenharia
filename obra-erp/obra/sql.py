@@ -339,6 +339,38 @@ CREATE INDEX IF NOT EXISTS idx_fotos_dia ON fotos (dia_id);
 CREATE INDEX IF NOT EXISTS idx_func_obra ON funcionarios (obra_id);
 CREATE INDEX IF NOT EXISTS idx_etapas_obra ON etapas (obra_id);
 CREATE INDEX IF NOT EXISTS idx_medicoes_dia ON medicoes (dia_id);
+
+-- Bot do Telegram: conversa vinculada a um usuário do app.
+CREATE TABLE IF NOT EXISTS telegram_chats (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id TEXT NOT NULL UNIQUE,
+    usuario_id BIGINT NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+    obra_id BIGINT,
+    historico TEXT DEFAULT '[]',
+    pendentes TEXT DEFAULT '[]',
+    vinculado_em TEXT,
+    atualizado_em TEXT
+);
+
+CREATE TABLE IF NOT EXISTS telegram_codigos (
+    codigo TEXT PRIMARY KEY,
+    usuario_id BIGINT NOT NULL REFERENCES usuarios (id) ON DELETE CASCADE,
+    expira_em TEXT NOT NULL
+);
+
+-- Arquivos recebidos esperando a instrução (texto ou áudio) que diz o que fazer.
+CREATE TABLE IF NOT EXISTS telegram_arquivos (
+    id BIGSERIAL PRIMARY KEY,
+    chat_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    nome TEXT DEFAULT '',
+    lote TEXT DEFAULT '',
+    criado_em TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_arquivos_chat ON telegram_arquivos (chat_id, lote);
 """
 
 # Todo o acesso passa pelo backend com a service key, nunca pelo navegador.
@@ -364,6 +396,9 @@ ALTER TABLE contratos         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contrato_medicoes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE locacoes          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE locacao_parcelas  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telegram_chats    ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telegram_codigos  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE telegram_arquivos ENABLE ROW LEVEL SECURITY;
 """
 
 # As sequências precisam ser reposicionadas depois de uma importação com ids

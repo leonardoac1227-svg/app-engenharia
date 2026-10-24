@@ -51,6 +51,11 @@ export async function renderizar(raiz) {
       </div>
     </div>
 
+    <!-- ---------------- telegram ---------------- -->
+    ${usuario.papel !== 'cliente' ? `
+      <div class="section-head"><h3>Bot do Telegram</h3></div>
+      <div class="card" id="cardTelegram"><p class="small muted" style="margin-bottom:0">Verificando...</p></div>` : ''}
+
     <!-- ---------------- obra ---------------- -->
     ${obra ? `
       <div class="section-head"><h3>Dados da obra</h3>
@@ -128,7 +133,78 @@ export async function renderizar(raiz) {
   ligarEventos(raiz, { obra, usuarios });
 }
 
+/* Bot do Telegram: conectar a conversa do celular ao usuário do app. */
+async function carregarTelegram(raiz) {
+  const card = raiz.querySelector('#cardTelegram');
+  if (!card) return;
+  let st;
+  try { st = await api.get('/api/telegram/status', { semCache: true, silencioso: true }); } catch (_) {
+    card.innerHTML = '<p class="small muted" style="margin-bottom:0">Não foi possível verificar o bot.</p>';
+    return;
+  }
+  if (!st.configurado) {
+    card.innerHTML = `
+      <p class="small" style="margin-top:0">Mande notas, comprovantes de PIX, fotos e áudios pelo Telegram e o
+      assistente lança tudo no app.</p>
+      <div class="alerta aviso" style="margin-bottom:0"><span class="alerta-ico">!</span>
+        <div><b>Bot desligado no servidor</b><div class="small">Crie o bot no @BotFather do Telegram e coloque o token
+        na variável <b>TELEGRAM_BOT_TOKEN</b> do Render. O passo a passo está no README.</div></div></div>`;
+    return;
+  }
+  const linkBot = st.bot ? `https://t.me/${encodeURIComponent(st.bot)}` : '';
+  card.innerHTML = `
+    <div class="row-between">
+      <div><div style="font-weight:600">${st.bot ? '@' + esc(st.bot) : 'Bot configurado'}</div>
+        <div class="item-sub">${st.conectado ? '✓ Seu Telegram está conectado' : 'Seu Telegram ainda não está conectado'}</div></div>
+    </div>
+    ${st.erro ? `<p class="small" style="color:var(--danger)">${esc(st.erro)}</p>` : ''}
+    ${estado.usuario?.papel === 'gestor' && !st.webhook ? `
+      <div class="alerta aviso" style="margin:12px 0 0"><span class="alerta-ico">!</span>
+        <div><b>Bot ainda não aponta para este servidor</b><div class="small">Toque em Ativar bot.</div></div></div>` : ''}
+    ${st.webhook_erro ? `<p class="small" style="color:var(--danger)">Último erro do Telegram: ${esc(st.webhook_erro)}</p>` : ''}
+    <div id="telegramCodigo"></div>
+    <div class="btn-linha">
+      ${st.conectado
+        ? `${linkBot ? `<a class="btn btn-outline" href="${linkBot}" target="_blank" rel="noopener">Abrir conversa</a>` : ''}
+           <button class="btn btn-ghost" data-acao="telegram-desconectar">Desconectar</button>`
+        : '<button class="btn btn-brass" data-acao="telegram-conectar">Conectar meu Telegram</button>'}
+      ${estado.usuario?.papel === 'gestor' ? '<button class="btn btn-outline" data-acao="telegram-ativar">Ativar bot</button>' : ''}
+    </div>`;
+
+  const conectar = card.querySelector('[data-acao=telegram-conectar]');
+  if (conectar) {
+    conectar.onclick = async () => {
+      const r = await api.post('/api/telegram/codigo', {});
+      card.querySelector('#telegramCodigo').innerHTML = `
+        <div class="alerta" style="margin:12px 0 0"><span class="alerta-ico">↗</span>
+          <div><b>Abra o bot e toque em Iniciar</b>
+            <div class="small">Se o Telegram não abrir sozinho, envie ao bot: <b>/start ${esc(r.codigo)}</b>
+            (vale por 20 minutos).</div></div></div>
+        ${r.link ? `<a class="btn btn-brass" style="margin-top:10px" href="${esc(r.link)}" target="_blank" rel="noopener">Abrir no Telegram</a>` : ''}`;
+    };
+  }
+  const desconectar = card.querySelector('[data-acao=telegram-desconectar]');
+  if (desconectar) {
+    desconectar.onclick = async () => {
+      const okDesconectar = await confirmar({ titulo: 'Desconectar o Telegram?', texto: 'O bot deixa de atender esta conversa.', confirmar: 'Desconectar' });
+      if (!okDesconectar) return;
+      await api.del('/api/telegram/conexao');
+      toast('Telegram desconectado.');
+      carregarTelegram(raiz);
+    };
+  }
+  const ativar = card.querySelector('[data-acao=telegram-ativar]');
+  if (ativar) {
+    ativar.onclick = async () => {
+      await api.post('/api/telegram/webhook', {});
+      toast('Bot ativado neste servidor.', 'ok');
+      carregarTelegram(raiz);
+    };
+  }
+}
+
 function ligarEventos(raiz, { obra, usuarios }) {
+  carregarTelegram(raiz);
   const acao = (nome, fn) => {
     const btn = raiz.querySelector(`[data-acao=${nome}]`);
     if (btn) btn.onclick = fn;
