@@ -126,6 +126,10 @@ DIÁRIO DE OBRA (tipo "diario")
 - Se o diário do dia já tem texto no contexto, devolva o texto COMPLETO já mesclado com o novo,
   sem perder o que existia.
 - Gere um "diario" sempre que o usuário relatar serviços executados ou ocorrências do dia.
+- Relato do que cada funcionário fez: escreva producao_dia por pessoa/frente, com quantidade, unidade
+  e turno (ex.: "Ademir: execução de 27 m² de reboco interno (manhã); arestamento de vãos (tarde).").
+  Mantenha os números ditos. "Metros" de serviço de área (reboco, chapisco, alvenaria, contrapiso,
+  pintura, revestimento, forro) = m². Corrija termos de obra mal transcritos pelo sentido.
 
 PONTO (tipo "ponto")
 - registros: um por pessoa citada, com funcionario_id do contexto e as horas do dia.
@@ -133,6 +137,8 @@ PONTO (tipo "ponto")
   "meio período"/"meio turno" = metade. Faltou = 0 horas com justificativa.
 - Abaixo da jornada, preencha "justificativa" com o motivo dito (ex.: "Consulta médica").
 - "Todo mundo"/"a equipe toda" = todos os funcionários ativos do contexto.
+- Funcionário citado no relato do dia trabalhando de manhã e à tarde (ou sem turno dito) = jornada
+  completa; só manhã ou só tarde = metade da jornada. Gere o ponto junto com o diário nesse caso.
 - Pessoa que NÃO está na lista: use funcionario_id 0 e o nome em "nome", e crie também uma ação
   "funcionario" (nome e função) para cadastrá-la.
 
@@ -150,6 +156,13 @@ CAIXA (tipos de despesa) — somente se "pode_financeiro" for true no contexto
   fantasia se houver, senão razão social), itens principais para a descrição, data de emissão
   (use como "data" se o usuário não disser outra) e vencimento/parcelas do boleto.
 - Coloque em "anexos" os índices (começando em 0) dos arquivos que são o comprovante daquela despesa.
+- Comprovante de PIX/transferência: valor, ID da transação (E2E/autenticação, sem espaços) em
+  numero_nota, recebedor em fornecedor, data do pagamento em "data", status "Pago" (ou "Reembolso" se
+  foi pago do bolso de alguém). Se existir conta em aberto no contexto com o mesmo fornecedor e valor,
+  use "pagar_despesa" nela em vez de criar outra. A descrição vem do que o usuário disser (materiais,
+  serviço); sem isso, "Pagamento via PIX para <recebedor>".
+- Nota fiscal e PIX da MESMA compra na mesma mensagem: UMA despesa só, com o número da NF, status
+  "Pago" e os dois arquivos em "anexos".
 - Se a mesma nota (mesmo número e fornecedor) já está nos lançamentos do contexto, NÃO crie outra:
   use "editar_despesa" com o despesa_id e somente os campos que mudam (os demais vazios/0).
 - Correções ("na verdade foram 1.500", "muda o fornecedor") de algo já lançado = "editar_despesa".
@@ -182,6 +195,20 @@ impessoal, sem inventar serviços que não estejam nos dados. Responda só com J
 - clima: mantenha o que já estiver informado; se não houver informação, "".
 - observacoes: faltas e justificativas, ocorrências, pendências e pontos de atenção.
 Se já houver texto nos campos, aproveite e melhore a redação sem perder informação."""
+
+PROMPT_OUVIR = """Você recebe mensagens de voz de um gestor de obras, em português do Brasil.
+1. "transcricao": transcreva fielmente todos os áudios, na ordem, corrigindo só a pontuação e termos
+   de construção civil evidentemente mal ouvidos. Sem áudio, devolva "".
+2. "obra_id": se a fala, o texto ou os documentos indicarem claramente uma das obras da lista
+   (pelo nome, cliente ou endereço), devolva o id dela; senão 0.
+Responda só com JSON: {"transcricao": "...", "obra_id": 0}"""
+
+ESQUEMA_OUVIR = {
+    "type": "object",
+    "properties": {"transcricao": _STR, "obra_id": _INT},
+    "required": ["transcricao", "obra_id"],
+    "additionalProperties": False,
+}
 
 ESQUEMA_RDO = {
     "type": "object",
@@ -562,3 +589,24 @@ def redigir_rdo(dia_id: int, pode_financeiro: bool) -> dict:
             "clima": texto(bruto.get("clima"), 200),
             "observacoes": texto(bruto.get("observacoes"), 4000),
             "fonte": fonte}
+
+
+# ---------------------------------------------------------------- áudio e obra
+
+def ouvir(audios: list[dict], texto_usuario: str, obras: list[dict]) -> dict:
+    """Transcreve os áudios e descobre de qual obra a mensagem fala.
+
+    Usado pelo bot do Telegram antes de `interpretar`: assim o pedido principal
+    já recebe texto (e pode cair no Claude se o Gemini falhar) e o contexto
+    certo da obra.
+    """
+    dados = {"obras": [{k: o.get(k) for k in ("id", "nome", "cliente", "endereco")} for o in obras],
+             "texto_do_usuario": texto_usuario or ""}
+    bruto, _fonte = ia_provedores.gerar(
+        PROMPT_OUVIR, "DADOS (JSON):\n" + json.dumps(dados, ensure_ascii=False), audios,
+        ESQUEMA_OUVIR, max_tokens=4096)
+    bruto = bruto if isinstance(bruto, dict) else {}
+    ids = {o["id"] for o in obras}
+    obra_id = _inteiro(bruto.get("obra_id"))
+    return {"transcricao": texto(bruto.get("transcricao"), 6000),
+            "obra_id": obra_id if obra_id in ids else 0}

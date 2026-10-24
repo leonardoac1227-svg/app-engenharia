@@ -80,7 +80,7 @@ obra/
   storage.py            → anexos: disco local ou Supabase Storage
   utils.py              → validação de entrada, moeda pt-BR, anexos (Pillow)
   security.py           → sessão, CSRF, papéis, escopo por obra, rate-limit
-  blueprints/           → paginas, auth, obras, diario, equipe, financeiro, relatorios, assistente
+  blueprints/           → paginas, auth, obras, diario, equipe, financeiro, relatorios, assistente, telegram
   services/
     fechamento.py       → consolidação da semana e dashboard
     relatorio.py        → exportação .txt e .csv
@@ -88,6 +88,9 @@ obra/
     ia.py               → resumo executivo (regras + IA opcional)
     ia_provedores.py    → Gemini (gratuito) e Claude (reserva paga)
     assistente.py       → fala/arquivos → lançamentos propostos e RDO por IA
+    bot_telegram.py     → bot do Telegram: lote de arquivos, áudio, respostas e botões
+    executor_acoes.py   → grava as ações do bot pelos mesmos endpoints da tela
+    telegram_api.py     → cliente da API de bots do Telegram
 static/
   css/style.css         → design system (tokens, componentes)
   js/                   → ES modules: api, estado, navegacao, util, views/
@@ -499,6 +502,52 @@ não é usada para treino) ou use `IA_ORDEM=anthropic`.
 
 ---
 
+## Bot do Telegram
+
+O mesmo assistente de IA, pelo chat do Telegram. Funciona direto no servidor
+(Render): não precisa de computador ligado.
+
+O que mandar:
+
+| Você manda | O bot faz |
+|---|---|
+| Foto, print ou PDF de **nota fiscal / cupom / boleto** | lê número da nota, valor, fornecedor e vencimento e lança a despesa com o arquivo anexado |
+| **Comprovante de PIX** | lê valor, ID da transação e recebedor; se houver conta em aberto igual, dá baixa nela |
+| **Áudio** "esse material é da obra X, 20 sacos de cimento..." | transcreve, escolhe a obra pela fala e completa a descrição |
+| **Fotos da obra** + "relatório fotográfico de ontem" | anexa as fotos no diário do dia citado |
+| **Áudio do fim do dia** "Ademir fez 27 metros de reboco de manhã e à tarde arestamento..." | monta o relatório técnico do dia por funcionário e lança o ponto |
+
+- Mande os arquivos primeiro e depois o áudio ou texto com a instrução (pode ser a
+  legenda da foto). O bot espera alguns segundos para juntar as fotos do mesmo envio.
+- Não deu para saber a obra? Ele pergunta com botões. `/obra` troca a obra padrão.
+- Nota repetida: botão **Lançar mesmo assim**. Exclusão: sempre um botão de confirmação.
+  Faltou o valor: responda só com o número (ex.: `350,00`).
+- O bot age como o usuário que conectou a conversa: o mestre de obra lança diário,
+  ponto e fotos, mas não despesas. Conversas não conectadas são ignoradas.
+- Áudio precisa do Gemini (`GEMINI_API_KEY`); o Claude não ouve áudio.
+- Se a IA falhar, os arquivos ficam guardados (por 6 horas): basta repetir a instrução.
+
+### Configurar (5 minutos)
+
+1. No Telegram, abra o **@BotFather**, envie `/newbot`, escolha um nome e um
+   usuário terminado em `bot`. Copie o **token**.
+2. No Render: *Environment* → adicione `TELEGRAM_BOT_TOKEN` com o token → *Save*.
+   Ao reiniciar, o app aponta o bot para o próprio endereço sozinho
+   (`RENDER_EXTERNAL_URL`). Fora do Render, defina `PUBLIC_URL` ou toque em
+   **Ativar bot** em Ajustes.
+3. No app: **Ajustes → Bot do Telegram → Conectar meu Telegram → Abrir no
+   Telegram → Iniciar**. Pronto. Cada pessoa (gestor, mestre) conecta o próprio
+   Telegram do mesmo jeito.
+
+| Variável | Para quê |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` | liga o bot |
+| `TELEGRAM_WEBHOOK_SECRET` | opcional; padrão derivado da `SECRET_KEY` |
+| `PUBLIC_URL` | endereço público do app, se não estiver no Render |
+| `FUSO_HORARIO` | padrão `America/Sao_Paulo`: define o "hoje" (o servidor roda em UTC) |
+
+---
+
 ## Deploy no Render
 
 1. **New → Web Service**, apontando para o repositório.
@@ -519,6 +568,7 @@ não é usada para treino) ou use `IA_ORDEM=anthropic`.
 | `ADMIN_EMAIL` / `ADMIN_SENHA` | credencial do primeiro gestor |
 | `FORCE_HTTPS` | `1` em produção (cookie `Secure`) |
 | `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` | opcionais, ligam o assistente de IA (ver acima) |
+| `TELEGRAM_BOT_TOKEN` | opcional, liga o bot do Telegram (ver acima) |
 | `MAX_UPLOAD_MB` | opcional, padrão 25 |
 
 Migrando da v1: copie o `obra_erp.db` antigo para `DATA_DIR` e a pasta

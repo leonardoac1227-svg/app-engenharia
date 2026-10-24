@@ -36,8 +36,11 @@ GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:g
 TEMPO_LIMITE = 90  # segundos — nota fiscal em PDF de várias páginas demora
 
 # Formatos que cada provedor lê. O que ficar fora é avisado, não quebra o pedido.
+# Áudio (nota de voz do Telegram, gravação do celular) só o Gemini entende.
+MIME_AUDIO = {"audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac",
+              "audio/flac", "audio/mp4", "audio/m4a", "audio/x-m4a", "audio/webm"}
 MIME_GEMINI = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/heif",
-               "application/pdf"}
+               "application/pdf"} | MIME_AUDIO
 MIME_CLAUDE_IMAGEM = {"image/jpeg", "image/png", "image/gif", "image/webp"}
 
 # Modelos do Claude que aceitam a reserva automática do servidor quando um
@@ -178,6 +181,12 @@ def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
         raise IaIndisponivel(
             "Assistente de IA desligado: configure GEMINI_API_KEY (gratuita) ou "
             "ANTHROPIC_API_KEY no servidor.")
+    if any(a["mime"] in MIME_AUDIO for a in arquivos):
+        # O Claude ignoraria o áudio e responderia sem ouvi-lo: melhor falhar.
+        provedores = [p for p in provedores if p == "gemini"]
+        if not provedores:
+            raise IaIndisponivel("Para entender áudio é preciso a GEMINI_API_KEY. "
+                                 "Mande a mensagem por texto.")
 
     falhas = []
     for provedor in provedores:

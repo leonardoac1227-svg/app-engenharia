@@ -31,7 +31,7 @@ from .sql import RLS_POSTGRES, SCHEMA_POSTGRES, alteracoes_postgres, para_postgr
 
 log = logging.getLogger("obra-erp")
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 EH_POSTGRES = config.BACKEND == "postgres"
 
@@ -585,6 +585,40 @@ CREATE INDEX IF NOT EXISTS idx_fotos_dia ON fotos (dia_id);
 CREATE INDEX IF NOT EXISTS idx_func_obra ON funcionarios (obra_id);
 CREATE INDEX IF NOT EXISTS idx_etapas_obra ON etapas (obra_id);
 CREATE INDEX IF NOT EXISTS idx_medicoes_dia ON medicoes (dia_id);
+
+-- Bot do Telegram: conversa vinculada a um usuário do app.
+CREATE TABLE IF NOT EXISTS telegram_chats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL UNIQUE,
+    usuario_id INTEGER NOT NULL,
+    obra_id INTEGER,
+    historico TEXT DEFAULT '[]',
+    pendentes TEXT DEFAULT '[]',
+    vinculado_em TEXT,
+    atualizado_em TEXT,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS telegram_codigos (
+    codigo TEXT PRIMARY KEY,
+    usuario_id INTEGER NOT NULL,
+    expira_em TEXT NOT NULL,
+    FOREIGN KEY (usuario_id) REFERENCES usuarios (id) ON DELETE CASCADE
+);
+
+-- Arquivos recebidos esperando a instrução (texto ou áudio) que diz o que fazer.
+CREATE TABLE IF NOT EXISTS telegram_arquivos (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL,
+    file_id TEXT NOT NULL,
+    tipo TEXT NOT NULL,
+    mime TEXT NOT NULL,
+    nome TEXT DEFAULT '',
+    lote TEXT DEFAULT '',
+    criado_em TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_telegram_arquivos_chat ON telegram_arquivos (chat_id, lote);
 """
 
 # Colunas acrescentadas depois da v1 do app. Bancos criados pelo SCHEMA acima

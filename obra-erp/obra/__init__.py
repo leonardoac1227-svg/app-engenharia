@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.6.0"
+__version__ = "3.7.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -196,9 +196,10 @@ def create_app() -> Flask:
     from .blueprints.relatorios import bp as bp_relatorios
     from .blueprints.locacoes import bp as bp_locacoes
     from .blueprints.assistente import bp as bp_assistente
+    from .blueprints.telegram import bp as bp_telegram
 
     for blueprint in (bp_paginas, bp_auth, bp_obras, bp_diario, bp_equipe, bp_financeiro,
-                      bp_relatorios, bp_locacoes, bp_contexto, bp_assistente):
+                      bp_relatorios, bp_locacoes, bp_contexto, bp_assistente, bp_telegram):
         app.register_blueprint(blueprint)
 
     @app.context_processor
@@ -225,6 +226,31 @@ def create_app() -> Flask:
     app.logger.info("Assistente de IA: %s", " → ".join(provedores) if provedores
                     else "desligado (sem GEMINI_API_KEY nem ANTHROPIC_API_KEY)")
 
+    _ligar_telegram(app)
+
     for aviso in config.problemas_de_configuracao():
         app.logger.warning("Configuração: %s", aviso)
     return app
+
+
+def _ligar_telegram(app: Flask) -> None:
+    """Com token e endereço público (no Render vem sozinho), aponta o bot para cá.
+
+    Roda em segundo plano: o Telegram fora do ar não pode atrasar a subida.
+    """
+    from .services import telegram_api
+    if not telegram_api.configurado():
+        return
+    if not config.PUBLIC_URL.startswith("https://"):
+        app.logger.info("Telegram: token presente, sem PUBLIC_URL — ative o webhook em Ajustes.")
+        return
+
+    def ativar():
+        try:
+            app.logger.info("Telegram: webhook em %s", telegram_api.ativar_webhook(config.PUBLIC_URL))
+        except Exception as erro:  # noqa: BLE001
+            app.logger.warning("Telegram: não foi possível ativar o webhook: %s", erro)
+
+    import threading
+    threading.Thread(target=ativar, daemon=True).start()
+

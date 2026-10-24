@@ -119,6 +119,7 @@ def health():
         "anexos": "supabase" if storage.usando_supabase() else "disco",
         "tema": "claro-2.2",
         "ia": _provedores_ia(),
+        "telegram": bool(config.TELEGRAM_BOT_TOKEN),
     }
 
 
