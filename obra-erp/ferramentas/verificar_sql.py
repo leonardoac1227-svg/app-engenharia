@@ -15,6 +15,9 @@ Este script lê todas as strings SQL do pacote e sinaliza:
    qualquer; o Postgres recusa a consulta. (Colunas do mesmo alias cuja
    chave `id` está no GROUP BY são aceitas, como faz o Postgres.)
 3. **`INSERT OR REPLACE`** e outras formas sem tradução na camada de dialeto.
+4. **INSERT em tabela sem coluna `id`** que não está em `TABELAS_SEM_ID` — a
+   camada de dialeto acrescentaria `RETURNING id` e o Postgres recusaria o
+   INSERT. Foi assim que o código de conexão do Telegram quebrou no Supabase.
 
 Uso:  python ferramentas/verificar_sql.py
 Saída: código 1 se encontrar problema, 0 se estiver tudo portável.
@@ -28,6 +31,20 @@ import re
 import sys
 
 RAIZ = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "obra")
+sys.path.insert(0, os.path.dirname(RAIZ))
+
+from obra.sql import SCHEMA_POSTGRES, TABELAS_SEM_ID  # noqa: E402
+
+
+def _tabelas_sem_id() -> set[str]:
+    sem_id = set()
+    for nome, corpo in re.findall(r"CREATE TABLE IF NOT EXISTS (\w+) \((.*?)\n\);", SCHEMA_POSTGRES, re.S):
+        if not re.search(r"^\s*id\s", corpo, re.M):
+            sem_id.add(nome.lower())
+    return sem_id
+
+
+SEM_ID = _tabelas_sem_id()
 
 FUNCOES_AGREGACAO = ("SUM(", "COUNT(", "AVG(", "MIN(", "MAX(", "GROUP_CONCAT(", "STRING_AGG(")
 
@@ -64,7 +81,7 @@ def _coletar_sql(caminho: str) -> list[tuple[int, str]]:
             textos.append(" ? ".join(partes))
 
         for texto in textos:
-            if re.search(r"\bSELECT\b.+\bFROM\b", texto, re.I | re.S):
+            if re.search(r"\bSELECT\b.+\bFROM\b|^\s*INSERT\s+(OR\s+IGNORE\s+)?INTO\b", texto, re.I | re.S):
                 encontrados.append((no.lineno, " ".join(texto.split())))
     return encontrados
 
@@ -152,6 +169,12 @@ def verificar(sql: str) -> list[str]:
     # 3) formas sem tradução
     if "INSERT OR REPLACE" in alto:
         problemas.append("INSERT OR REPLACE não tem tradução — use ON CONFLICT DO UPDATE")
+
+    # 4) INSERT em tabela sem id: o dialeto acrescentaria RETURNING id
+    alvo = re.search(r"\bINSERT\s+(?:OR\s+IGNORE\s+)?INTO\s+(\w+)", sql, re.I)
+    if alvo and alvo.group(1).lower() in SEM_ID and alvo.group(1).lower() not in TABELAS_SEM_ID:
+        problemas.append(f"INSERT em '{alvo.group(1)}', que não tem coluna id — inclua a tabela em "
+                         "TABELAS_SEM_ID (obra/sql.py), senão o Postgres recusa o RETURNING id")
 
     return problemas
 

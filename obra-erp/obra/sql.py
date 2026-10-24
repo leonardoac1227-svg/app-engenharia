@@ -23,7 +23,7 @@ import re
 from functools import lru_cache
 
 # Tabelas sem coluna `id` — nelas não se acrescenta RETURNING id.
-TABELAS_SEM_ID = {"usuario_obras"}
+TABELAS_SEM_ID = {"usuario_obras", "telegram_codigos"}
 
 _RE_INSERT_IGNORE = re.compile(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", re.I)
 _RE_COLLATE_IGUAL = re.compile(r"([\w.]+)\s*=\s*\?\s*COLLATE\s+NOCASE", re.I)

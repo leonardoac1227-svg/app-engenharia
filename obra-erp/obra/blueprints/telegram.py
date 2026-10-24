@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import logging
 import secrets
+import time
 
 from flask import Blueprint, current_app, jsonify, request
 
@@ -14,6 +16,8 @@ from ..services import bot_telegram, telegram_api
 from ..utils import ApiErro
 
 bp = Blueprint("telegram", __name__)
+log = logging.getLogger(__name__)
+ERRO_RECENTE = 15 * 60  # segundos: erro mais antigo que isso já foi superado
 
 
 @bp.post("/telegram/webhook")
@@ -24,7 +28,11 @@ def webhook():
     enviado = request.headers.get("X-Telegram-Bot-Api-Secret-Token", "")
     if not secrets.compare_digest(enviado, telegram_api.segredo_webhook()):
         return jsonify({"ok": False}), 403
-    bot_telegram.receber(current_app._get_current_object(), request.get_json(silent=True) or {})
+    try:
+        bot_telegram.receber(current_app._get_current_object(), request.get_json(silent=True) or {})
+    except Exception:  # noqa: BLE001
+        # Responder erro faria o Telegram reenviar a mesma mensagem sem parar.
+        log.exception("Telegram: falha ao receber a atualização")
     return jsonify({"ok": True})
 
 
@@ -41,7 +49,10 @@ def status():
             if usuario["papel"] == "gestor":
                 info = telegram_api.estado_webhook()
                 resposta["webhook"] = info.get("url", "")
-                resposta["webhook_erro"] = info.get("last_error_message", "")
+                # O Telegram guarda o último erro mesmo depois de voltar a
+                # entregar: só vale mostrar o que é recente.
+                if time.time() - (info.get("last_error_date") or 0) < ERRO_RECENTE:
+                    resposta["webhook_erro"] = info.get("last_error_message", "")
         except telegram_api.ErroTelegram as erro:
             resposta["erro"] = str(erro)
     return jsonify(resposta)
