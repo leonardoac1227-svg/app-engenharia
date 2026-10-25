@@ -401,6 +401,8 @@ def processar(app, chat_id: str, texto_msg: str, lote: str = "", esperar: bool =
             pendente = faltando[-1]
             pendente["acao"]["dados"]["valor"] = valor
             pendente["acao"]["dados"].pop("faltando", None)
+            if not pendente["acao"]["dados"].get("descricao"):
+                pendente["acao"]["dados"]["descricao"] = pendente["acao"].get("resumo") or "Despesa"
             _resolver_pendente(app, chat_id, v, pendente)
             return
         lote = lote or _pegar_fila(chat_id)
@@ -439,10 +441,27 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
     arquivos = [{"nome": l["nome"], "mime": l["mime"], "dados": telegram_api.baixar(l["file_id"]),
                  "file_id": l["file_id"]} for l in linhas]
 
+    # Lançamento que ficou incompleto: a resposta do usuário completa o mesmo
+    # lançamento, então os arquivos dele voltam para a análise (sem eles a IA
+    # pedia de novo o valor que estava na foto).
+    mensagem = texto_msg
+    incompletos = [p for p in v["pendentes"] if p.get("motivo") == "faltando"]
+    if incompletos:
+        ja = {a["file_id"] for a in arquivos}
+        for pendente in incompletos:
+            for ref in pendente.get("arquivos", []):
+                if ref["file_id"] not in ja:
+                    arquivos.append({**ref, "dados": telegram_api.baixar(ref["file_id"])})
+                    ja.add(ref["file_id"])
+        mensagem += ("\n(Complete o lançamento que ficou incompleto — "
+                     + "; ".join(catalogo.descrever(p["acao"]) for p in incompletos)
+                     + " — usando esta mensagem e os arquivos dele, reenviados aqui. Não duplique.)")
+        v["pendentes"] = [p for p in v["pendentes"] if p.get("motivo") != "faltando"]
+
     pf, pg = _perfil(v)
     inicio = time.monotonic()
     resultado = assistente.interpretar(
-        obras, texto_msg, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
+        obras, mensagem, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
         obra_padrao=v["obra_id"] or 0, prazo=PRAZO_IA)
     log.info("Telegram %s: IA em %.1fs (%s %s)", chat_id, time.monotonic() - inicio,
              resultado["fonte"], resultado["modelo"])

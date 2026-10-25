@@ -491,16 +491,23 @@ def _n_pagar(d, ctx):
     if atual["status_pagamento"] == "Pago":
         raise Pular(f"\"{atual['descricao']}\" já estava paga.")
     return {"despesa_id": atual["id"], "despesa_atual": atual,
-            "pago_em": data_ou(d.get("pago_em") or d.get("data"), ctx.referencia)}
+            "pago_em": data_ou(d.get("pago_em") or d.get("data"), ctx.referencia),
+            "anexos": indices(d.get("anexos"), ctx.arquivos)}
+
+
+def _e_pagar(ex, d, arq):
+    ex.req("POST", f"/api/despesas/{d['despesa_id']}/pagar", json={"pago_em": d["pago_em"]})
+    anexos = ex.arquivos(d.get("anexos"), arq)
+    if anexos:
+        ex.req("POST", f"/api/despesas/{d['despesa_id']}/anexos", dados={"anexos": anexos})
 
 
 _registrar(TipoAcao(
     "pagar_despesa", "Baixa de pagamento",
-    "despesa_id (de contas_em_aberto), pago_em",
-    _n_pagar,
-    lambda ex, d, arq: ex.req("POST", f"/api/despesas/{d['despesa_id']}/pagar", json={"pago_em": d["pago_em"]}),
+    "despesa_id (de contas_em_aberto), pago_em, anexos (comprovante)",
+    _n_pagar, _e_pagar,
     lambda d: f"Baixa de \"{d['despesa_atual']['descricao']}\" ({moeda(d['despesa_atual']['valor'])}) "
-              f"em {data_br(d['pago_em'])}",
+              f"em {data_br(d['pago_em'])}" + (" · 📎" if d.get("anexos") else ""),
     permissao="financeiro",
     quando="\"paguei a nota X\", \"quitei o boleto\", comprovante de PIX de uma conta em aberto"))
 
@@ -671,6 +678,58 @@ _registrar(TipoAcao(
     permissao="gestor", quando="orçamento total, previsão de término, obra parada ou concluída"))
 
 
+# ---------------------------------------------------------------- esquema dos dados
+#
+# Os campos de "dados" precisam estar DECLARADOS no esquema enviado ao Gemini.
+# Com saída estruturada ele só gera as propriedades listadas: um objeto sem
+# propriedades voltava sempre vazio ({}), e o lançamento saía "R$ 0,00, faltou
+# descrição e valor" mesmo com a IA tendo lido o total da nota.
+
+_S, _N, _I, _B = {"type": "string"}, {"type": "number"}, {"type": "integer"}, {"type": "boolean"}
+_ALTERACOES = {k: _S for k in ("descricao", "fornecedor", "categoria", "status_pagamento", "reembolsar_para",
+                               "numero_nota", "vencimento", "mover_para_data", "nome", "funcao", "telefone",
+                               "documento", "chave_pix", "cliente", "endereco", "data_inicio", "previsao_fim",
+                               "status")}
+_ALTERACOES.update(valor=_N, orcamento_total=_N, ativo=_B)
+ESQUEMA_DADOS = {
+    "type": "object",
+    "properties": {
+        **{k: _S for k in ("data", "producao_dia", "clima", "observacoes", "nome", "funcao", "telefone",
+                           "documento", "chave_pix", "legenda", "ambiente", "categoria", "descricao",
+                           "fornecedor", "status_pagamento", "numero_nota", "vencimento", "reembolsar_para",
+                           "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
+                           "pago_em", "meta", "formato", "mover_para_data")},
+        **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
+                           "parcela_id", "locacao_id", "ciclos")},
+        "valor": _N, "orcamento_previsto": _N,
+        "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B,
+        "anexos": {"type": "array", "items": _I},
+        "frete_datas": {"type": "array", "items": _S},
+        "registros": {"type": "array", "items": {"type": "object", "properties": {
+            "funcionario_id": _I, "nome": _S, "horas": _N, "justificativa": _S}}},
+        "alteracoes": {"type": "object", "properties": _ALTERACOES},
+    },
+}
+
+# Nomes que o modelo às vezes usa no lugar dos nossos.
+APELIDOS = {"valor_total": "valor", "total": "valor", "value": "valor", "amount": "valor", "preco": "valor",
+            "description": "descricao", "supplier": "fornecedor", "vendor": "fornecedor", "loja": "fornecedor",
+            "nota": "numero_nota", "nf": "numero_nota", "numero": "numero_nota", "date": "data",
+            "attachments": "anexos", "arquivos": "anexos"}
+APELIDOS_CAIXA = {"status": "status_pagamento", "situacao": "status_pagamento"}
+
+
+def _juntar_dados(item: dict, tipo: str) -> dict:
+    """Junta "dados" com campos soltos no item e traduz apelidos (o que está em "dados" vale mais)."""
+    soltos = {k: v for k, v in item.items() if k not in ("tipo", "resumo", "obra_id", "dados")}
+    dados = {**soltos, **(item.get("dados") if isinstance(item.get("dados"), dict) else {})}
+    apelidos = {**APELIDOS, **(APELIDOS_CAIXA if tipo in ("despesa", "locacao_lancar") else {})}
+    for apelido, campo in apelidos.items():
+        if apelido in dados and dados.get(campo) in (None, "", 0, []):
+            dados[campo] = dados[apelido]
+    return dados
+
+
 # ---------------------------------------------------------------- uso
 
 def permitido(tipo: TipoAcao, ctx: Contexto) -> bool:
@@ -703,8 +762,11 @@ def normalizar(bruto_acoes, ctx: Contexto) -> tuple[list[dict], list[str]]:
         if not permitido(tipo, ctx):
             avisos.append(f"{tipo.titulo}: seu perfil não tem permissão.")
             continue
-        dados = item.get("dados") if isinstance(item.get("dados"), dict) else \
-            {k: v for k, v in item.items() if k not in ("tipo", "resumo", "obra_id")}
+        dados = _juntar_dados(item, tipo.nome)
+        if tipo.nome == "despesa" and not texto(dados.get("descricao"), 200):
+            # Sem descrição, aproveita o resumo da IA ou o fornecedor: só o valor é indispensável.
+            dados["descricao"] = texto(item.get("resumo"), 200) or (
+                f"Compra em {texto(dados.get('fornecedor'), 120)}" if texto(dados.get("fornecedor"), 120) else "")
         try:
             conferido = tipo.normalizar(dados, ctx)
         except Pular as aviso:
