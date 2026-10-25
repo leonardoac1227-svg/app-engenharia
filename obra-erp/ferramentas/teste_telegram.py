@@ -179,6 +179,33 @@ fila_ia[:] = [resposta(OA, acoes=[A('editar_despesa', despesa_id=despesas(OA)[-1
 entregar({'text': 'essa última passa para reembolso'})
 ok(despesas(OA)[-1]['status_pagamento'] == 'Reembolso', 'troca de status pela conversa')
 
+print('== CASO REAL: DADOS FORA DO LUGAR E RESPOSTA QUE COMPLETA ==')
+n_desp = len(despesas(OA))
+entregar({'photo': [{'file_id': 'nota1'}]})
+fila_ia[:] = [resposta(OA, 'obra o13 dia sábado dois baldes para concretagem de vigas', [
+    {'tipo': 'despesa', 'resumo': '2 baldes de aço — concretagem de vigas', 'dados': {},
+     'valor_total': 64, 'supplier': 'Almeida e Caires', 'status': 'Pago'}],
+    texto='Lancei a despesa do orçamento de 2 baldes de aço no valor de R$ 64,00.')]
+entregar({'voice': {'file_id': 'voz1'}})
+d = despesas(OA)
+ok(len(d) == n_desp + 1 and d[-1]['valor'] == 64 and d[-1]['anexos'] == 1 and 'faltou' not in ultima(),
+   'valor lido entra no lançamento e a foto fica anexada', (d[-1], ultima()))
+n_desp = len(despesas(OA))
+entregar({'photo': [{'file_id': 'pix1'}]})
+fila_ia[:] = [resposta(OA, acoes=[A('despesa', categoria='Material', fornecedor='Loja X', anexos=[0])])]
+entregar({'text': 'compra da loja x'})
+ok('faltou valor' in ultima(), 'sem valor legível: pergunta', ultima())
+fila_ia[:] = [resposta(OA, acoes=[A('despesa', descricao='Pregos', valor=35, fornecedor='Loja X',
+                                    status_pagamento='Pago', anexos=[0])])]
+entregar({'text': 'são pregos, 35 reais, pago'})
+ok(chamadas[-1]['arquivos'] and chamadas[-1]['arquivos'][0]['dados'] == ARQUIVOS['pix1']
+   and 'Complete o lançamento' in chamadas[-1]['texto'], 'resposta em texto reenvia a foto do lançamento incompleto')
+d = despesas(OA)
+ok(len(d) == n_desp + 1 and d[-1]['descricao'] == 'Pregos' and d[-1]['anexos'] == 1, 'completa sem duplicar, com a foto', d[-2:])
+with app.app_context():
+    from obra.services.bot_telegram import vinculo
+    ok(not [p for p in vinculo(str(CHAT))['pendentes'] if p['motivo'] == 'faltando'], 'pendência resolvida some')
+
 print('== RELATÓRIO DO DIA E PONTO POR ÁUDIO ==')
 fila_ia[:] = [resposta(OA, 'Ademir fez 27 metros de reboco de manhã e à tarde arestamento.', [
     A('diario', producao_dia='Ademir: execução de 27 m² de reboco (manhã); arestamento (tarde).'),

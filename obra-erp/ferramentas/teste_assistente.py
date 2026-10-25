@@ -117,6 +117,33 @@ prompt_mestre = acoes.texto_para_prompt(False, False)
 ok('despesa:' in prompt_gestor and 'despesa:' not in prompt_mestre and 'ponto:' in prompt_mestre,
    'prompt do mestre não oferece ações de caixa')
 
+print('== DADOS DO LANÇAMENTO CHEGAM MESMO FORA DO LUGAR ==')
+from obra.services import assistente as srv
+props = srv.ESQUEMA['properties']['acoes']['items']['properties']['dados'].get('properties', {})
+ok({'valor', 'descricao', 'fornecedor', 'numero_nota', 'anexos', 'registros', 'alteracoes'} <= set(props),
+   'esquema enviado ao Gemini declara os campos de "dados" (sem isso ele devolvia {})', sorted(props))
+ctx = acoes.Contexto(O, '2026-08-03', True, True, [{'nome': 'a.jpg', 'mime': 'image/jpeg'}])
+conf, _ = acoes.normalizar([{'tipo': 'despesa', 'resumo': '2 baldes de aço para concretagem', 'dados': {},
+                             'valor_total': '64,00', 'supplier': 'Almeida e Caires', 'nota': 'ORC 31797',
+                             'status': 'pago'}], ctx)
+d = conf[0]['dados']
+ok(d['valor'] == 64 and d['fornecedor'] == 'Almeida e Caires' and d['numero_nota'] == 'ORC 31797'
+   and d['status_pagamento'] == 'Pago' and d['descricao'] == '2 baldes de aço para concretagem'
+   and 'faltando' not in d, 'campos soltos e apelidos viram o lançamento; resumo vira descrição', d)
+
+print('== TODO ARQUIVO FICA SALVO NA DESPESA ==')
+arqs = [{'nome': 'cupom.jpg', 'mime': 'image/jpeg'}, {'nome': 'laje.jpg', 'mime': 'image/jpeg'},
+        {'nome': 'boleto.pdf', 'mime': 'application/pdf'}, {'nome': 'fala.ogg', 'mime': 'audio/ogg'}]
+lista, _ = acoes.normalizar([A('despesa', descricao='Cimento', valor=100), A('foto', anexos=[1])],
+                            acoes.Contexto(O, '2026-08-03', True, True, arqs))
+srv._garantir_anexos(lista, arqs)
+ok(lista[0]['dados']['anexos'] == [0, 2] and lista[1]['dados']['anexos'] == [1] and '📎' in lista[0]['descricao'],
+   'despesa sem anexo recebe cupom e boleto (a foto da obra e o áudio ficam fora)', [a['dados'] for a in lista])
+lista, _ = acoes.normalizar([A('despesa', descricao='A', valor=1), A('despesa', descricao='B', valor=2)],
+                            acoes.Contexto(O, '2026-08-03', True, True, arqs[:2]))
+srv._garantir_anexos(lista, arqs[:2])
+ok([a['dados']['anexos'] for a in lista] == [[0], [1]], 'duas despesas e dois arquivos: um para cada')
+
 print('== SEM CHAVE ==')
 config.GEMINI_API_KEY = ''; config.ANTHROPIC_API_KEY = ''
 r = perguntar()
@@ -205,6 +232,16 @@ ok(r['resultados'][0]['ok'] and not any(x['id'] == AREIA for x in c.get(f'/api/d
 r = aplicar([{'tipo': 'pagar_semana', 'dados': {'data': '2026-08-04'}}]).get_json()
 ok(r['resultados'][0]['ok'] and not [x for x in c.get(f'/api/dias/{SEG}/despesas').get_json() if x['status_pagamento'] == 'Em Aberto'],
    'baixa de todas as contas da semana', r)
+
+print('== BAIXA COM COMPROVANTE ==')
+conta = lancar(SEG, descricao='Brita', fornecedor='Pedreira', valor='250')
+respostas['gemini'] = {'resposta': 'Baixa feita.', 'acoes': [A('pagar_despesa', despesa_id=conta, pago_em='2026-08-03')]}
+p2 = perguntar(arquivos=[('pix.jpg', JPG)]).get_json()
+ok(p2['acoes'][0]['dados']['anexos'] == [0], 'comprovante de PIX vai junto com a baixa', p2['acoes'])
+r = aplicar([{'tipo': a['tipo'], 'dados': a['dados']} for a in p2['acoes']], arquivos=[('pix.jpg', JPG)]).get_json()
+brita = next(x for x in c.get(f'/api/dias/{SEG}/despesas').get_json() if x['id'] == conta)
+ok(r['resultados'][0]['ok'] and brita['status_pagamento'] == 'Pago' and len(brita['anexos']) == 1,
+   'baixa gravada com o comprovante anexado', brita)
 
 print('== MESTRE DE OBRA ==')
 c.post('/api/usuarios', json={'nome': 'Mestre', 'email': 'mestre@obra.local', 'senha': 'mestre123',

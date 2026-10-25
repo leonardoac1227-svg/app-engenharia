@@ -45,7 +45,7 @@ ESQUEMA = {
                     "tipo": {"type": "string", "enum": list(catalogo.CATALOGO)},
                     "obra_id": {"type": "integer"},
                     "resumo": {"type": "string"},
-                    "dados": {"type": "object"},
+                    "dados": catalogo.ESQUEMA_DADOS,
                 },
                 "required": ["tipo", "dados"],
             },
@@ -64,6 +64,8 @@ REGRAS GERAIS
   Sem data dita, use data_referencia.
 - Use os IDs do contexto (obras, funcionários, lançamentos, locações). Não invente IDs.
 - Uma ação por coisa a gravar; pode haver várias ações de tipos diferentes.
+- Preencha SEMPRE os campos dentro de "dados" (valor, descricao, fornecedor, numero_nota, anexos...).
+  O que você escreve em "resposta" não é gravado: só "dados" vira lançamento.
 - Áudios: transcreva fielmente em "transcricao" (corrija só pontuação e termos de obra mal ouvidos)
   e trate o conteúdo como a mensagem do usuário. Áudio nunca vai em "anexos".
 - "obra_id": a obra de que a mensagem trata (pelo nome, apelido, cliente ou endereço citado, ou o
@@ -82,6 +84,8 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
   se o usuário disser que pagou do bolso = "Reembolso"); boleto, a prazo, faturado = "Em Aberto".
 - Data: a que o usuário disser; senão a de emissão do documento.
 - Descrição: itens com quantidade e unidade + o que o usuário disse (finalidade).
+- Todo arquivo que não for foto da obra (nota, cupom, orçamento, boleto, comprovante) vai em "anexos" da
+  despesa a que se refere — o usuário quer o arquivo salvo junto com o lançamento.
 - Mesma nota (número e fornecedor) já nos lançamentos do contexto, ou PIX de uma conta em aberto
   igual: NÃO crie outra — use editar_despesa (anexando o comprovante) ou pagar_despesa.
 
@@ -274,6 +278,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
         resultado["acoes"] += conferidas
         resultado["avisos"] += avisos
 
+    _garantir_anexos(resultado["acoes"], arquivos)
     usados = {i for a in resultado["acoes"] for i in a["dados"].get("anexos", [])}
     for i, a in enumerate(arquivos):
         if i not in usados and not a["mime"].startswith("audio/") and not resultado["precisa_obra"]:
@@ -282,6 +287,30 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
         resultado["resposta"] = "Preparei os lançamentos abaixo." if resultado["acoes"] else \
             "Não encontrei nada para lançar."
     return resultado
+
+
+def _garantir_anexos(acoes: list[dict], arquivos: list[dict]) -> None:
+    """Todo arquivo enviado fica salvo junto com o lançamento.
+
+    O modelo às vezes lê a nota mas esquece de citá-la em "anexos". Arquivo que
+    não virou foto da obra nem comprovante de outra ação vai para a despesa
+    (ou baixa/correção) que ficou sem anexo: uma só leva todos; várias, um para
+    cada na ordem, quando a conta fecha; senão, todos na primeira.
+    """
+    usados = {i for a in acoes for i in a["dados"].get("anexos", [])}
+    soltos = [i for i, a in enumerate(arquivos) if i not in usados and not a["mime"].startswith("audio/")]
+    candidatas = [a for a in acoes if a["tipo"] in ("despesa", "editar_despesa", "pagar_despesa")
+                  and not a["dados"].get("anexos")]
+    if not soltos or not candidatas:
+        return
+    if len(candidatas) > 1 and len(soltos) == len(candidatas):
+        partes = [[i] for i in soltos]
+    else:
+        partes = [soltos] + [[] for _ in candidatas[1:]]
+    for acao, indices in zip(candidatas, partes):
+        if indices:
+            acao["dados"]["anexos"] = indices
+            acao["descricao"] = catalogo.descrever(acao)
 
 
 def reconferir(obra_id: int, acoes: list[dict], arquivos: list[dict], pode_financeiro: bool,
