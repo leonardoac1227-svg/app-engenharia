@@ -6,8 +6,11 @@ Fluxo de uma mensagem:
 1. **Arquivos** (foto, print, PDF de nota, comprovante de PIX, áudio) entram na
    fila da conversa. Foto sozinha recebe um aviso de "recebido".
 2. **Instrução** (texto, legenda ou áudio) fecha o envio: depois de alguns
-   segundos — tempo de chegarem as outras fotos — tudo vai junto para a IA,
-   numa chamada só (ouve o áudio, descobre a obra, lê os documentos).
+   segundos — tempo de chegarem as outras fotos — tudo vai junto para a IA
+   (o áudio é transcrito e a obra e os documentos são lidos com ele).
+   Se a instrução não vier em `ATRASO_FOTO` segundos, o arquivo é analisado
+   sozinho. Sem saber a obra, o bot pergunta, e o áudio ou texto que chegar
+   depois responde a mesma pergunta.
 3. As ações voltam conferidas e o `Executor` grava pelos endpoints do app,
    como o usuário vinculado à conversa.
 4. O bot responde o que gravou. Exclusão, baixa em lote e fechar semana pedem
@@ -43,7 +46,8 @@ log = logging.getLogger(__name__)
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
 ATRASO_LOTE = 3.0            # segundos esperando o resto das fotos do mesmo envio
-PRAZO_IA = 150               # segundos: no bot não há limite do gunicorn
+ATRASO_FOTO = 30             # segundos esperando o áudio que explica a foto; None desliga
+PRAZO_IA = 150              # segundos: no bot não há limite do gunicorn
 VALIDADE_FILA = timedelta(hours=1)        # arquivo esperando instrução
 VALIDADE_TENTATIVA = timedelta(hours=12)  # arquivo de tentativa que falhou (botão "tentar de novo")
 VALIDADE_CODIGO = timedelta(minutes=20)
@@ -62,11 +66,12 @@ AJUDA = """Sou o assistente da obra e faço tudo que o app faz. Fale do jeito qu
 🎙 Áudio: "esse material é da obra O13, 2 baldes para a concretagem".
 📷 Fotos + "relatório fotográfico de ontem" — anexo no dia certo.
 🗣 Fim do dia: "Ademir fez 27 metros de reboco de manhã e à tarde arestamento; o Carlos faltou, atestado" — monto o diário e o ponto.
+🕗 Ponto: "Ademir trabalhou o dia inteiro hoje", "Ademir e Ailton vieram", "a equipe inteira esteve na obra".
 💰 "Essa nota está em aberto", "passa para reembolso", "paguei o boleto da areia", "frete de 3 viagens"...
 👷 "Cadastra o Marcos, armador", "o João saiu da obra".
 📊 "Me manda o relatório da semana", "quanto gastei essa semana?"
 
-Mande os arquivos primeiro e depois o áudio ou texto (pode ser a legenda da foto).
+Pode mandar só a foto: eu analiso sozinho. Se quiser explicar, mande o áudio ou texto logo depois (ou na legenda).
 
 /obra — obra padrão · /relatorio — PDF da semana · /teste — testar a IA · /ajuda"""
 
@@ -214,6 +219,9 @@ def receber(app, update: dict) -> None:
                     VALUES (?, ?, ?, ?, ?, '', ?)""", (chat_id, file_id, tipo, mime, nome[:120], agora_iso()))
 
     if texto_msg or (arquivo and arquivo[1] == "audio"):
+        # Renova a fila: o temporizador da foto não pode correr na frente da instrução.
+        executar("UPDATE telegram_arquivos SET criado_em = ? WHERE chat_id = ? AND lote = ''",
+                 (agora_iso(), chat_id))
         _em_segundo_plano(app, processar, chat_id, texto_msg)
         return
 
@@ -221,8 +229,23 @@ def receber(app, update: dict) -> None:
     soltos = um("SELECT COUNT(*) AS n FROM telegram_arquivos WHERE chat_id = ? AND lote = ''",
                 (chat_id,))["n"]
     if soltos == 1:
-        telegram_api.enviar(chat_id, "📎 Recebido. Pode mandar mais; depois envie um áudio ou texto "
-                                     "dizendo o que fazer (obra, dia, materiais...).")
+        telegram_api.enviar(chat_id, "📎 Recebido. Já vou analisar. Se quiser explicar, mande agora "
+                                     "um áudio ou texto (obra, dia, para que serve...).")
+    if ATRASO_FOTO is not None:
+        _em_segundo_plano(app, analisar_sem_instrucao, chat_id)
+
+
+def analisar_sem_instrucao(app, chat_id: str) -> None:
+    """A instrução não veio: analisa o que está na fila, uma vez só por envio."""
+    time.sleep(ATRASO_FOTO or 0)
+    ultimo = um("SELECT MAX(criado_em) AS m FROM telegram_arquivos WHERE chat_id = ? AND lote = ''",
+                (chat_id,))["m"]
+    limite = (datetime.now() - timedelta(seconds=(ATRASO_FOTO or 0) - 1)).isoformat(timespec="seconds")
+    if not ultimo or ultimo > limite:
+        return  # já foi levado por uma instrução, ou chegou arquivo mais novo com o próprio prazo
+    lote = _pegar_fila(chat_id)
+    if _arquivos_do_lote(lote):
+        processar(app, chat_id, "", lote=lote, esperar=False)
 
 
 # ---------------------------------------------------------------- comandos
@@ -441,28 +464,39 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
     arquivos = [{"nome": l["nome"], "mime": l["mime"], "dados": telegram_api.baixar(l["file_id"]),
                  "file_id": l["file_id"]} for l in linhas]
 
-    # Lançamento que ficou incompleto: a resposta do usuário completa o mesmo
-    # lançamento, então os arquivos dele voltam para a análise (sem eles a IA
+    # Foto analisada sem instrução: não herda a obra da conversa anterior, porque
+    # lançar a nota na obra errada é pior que perguntar.
+    sem_instrucao = not texto_msg and not any(a["mime"].startswith("audio/") for a in arquivos)
+    obra_conversa = 0 if sem_instrucao else (v["obra_id"] or 0)
+
+    # Lançamento que ficou incompleto ou esperando a obra: a resposta do usuário
+    # vale para ele, então os arquivos voltam para a análise (sem eles a IA
     # pedia de novo o valor que estava na foto).
     mensagem = texto_msg
-    incompletos = [p for p in v["pendentes"] if p.get("motivo") == "faltando"]
-    if incompletos:
+    incompletos = [p for p in v["pendentes"] if p.get("motivo") in ("faltando", "obra")]
+    if incompletos and not sem_instrucao:
         ja = {a["file_id"] for a in arquivos}
         for pendente in incompletos:
             for ref in pendente.get("arquivos", []):
                 if ref["file_id"] not in ja:
                     arquivos.append({**ref, "dados": telegram_api.baixar(ref["file_id"])})
                     ja.add(ref["file_id"])
-        mensagem += ("\n(Complete o lançamento que ficou incompleto — "
-                     + "; ".join(catalogo.descrever(p["acao"]) for p in incompletos)
-                     + " — usando esta mensagem e os arquivos dele, reenviados aqui. Não duplique.)")
-        v["pendentes"] = [p for p in v["pendentes"] if p.get("motivo") != "faltando"]
+        faltando = [catalogo.descrever(p["acao"]) for p in incompletos if p["motivo"] == "faltando"]
+        if faltando:
+            mensagem += ("\n(Complete o lançamento que ficou incompleto — " + "; ".join(faltando)
+                         + " — usando esta mensagem e os arquivos dele, reenviados aqui. Não duplique.)")
+        if len(faltando) < len(incompletos):
+            mensagem += ("\n(Estes arquivos reenviados esperavam a obra: lance-os conforme esta mensagem. "
+                         "Não duplique.)")
+        v["pendentes"] = [p for p in v["pendentes"] if p not in incompletos]
+    else:
+        incompletos = []
 
     pf, pg = _perfil(v)
     inicio = time.monotonic()
     resultado = assistente.interpretar(
         obras, mensagem, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
-        obra_padrao=v["obra_id"] or 0, prazo=PRAZO_IA)
+        obra_padrao=obra_conversa, prazo=PRAZO_IA)
     log.info("Telegram %s: IA em %.1fs (%s %s)", chat_id, time.monotonic() - inicio,
              resultado["fonte"], resultado["modelo"])
 
@@ -477,9 +511,12 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
         telegram_api.enviar(chat_id, cabeca + "Para qual obra é isso?", botoes)
         return
 
-    obra_id = resultado["obra_id"] or (v["obra_id"] or 0)
+    obra_id = resultado["obra_id"] or obra_conversa
     _finalizar(app, chat_id, v, resultado, arquivos, obra_id, texto_msg)
     _encerrar_lote(lote)
+    for pendente in incompletos:
+        if pendente.get("lote"):
+            _encerrar_lote(pendente["lote"])
 
 
 def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict], obra_id: int,
@@ -518,7 +555,7 @@ def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict]
         {"papel": "assistente", "texto": resultado["resposta"]
          + (f" [gravado: {'; '.join(gravados)}]" if gravados else "")},
     ])[-MAX_HISTORICO:]
-    _salvar(chat_id, obra_id=obra_id or None, historico=historico, pendentes=v["pendentes"])
+    _salvar(chat_id, obra_id=obra_id or v["obra_id"], historico=historico, pendentes=v["pendentes"])
 
     obra = um("SELECT nome FROM obras WHERE id = ?", (obra_id,)) if obra_id else None
     partes = [f"🏗 {obra['nome']}"] if obra else []

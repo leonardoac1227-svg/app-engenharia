@@ -274,7 +274,8 @@ ok(r.status_code == 400, 'mensagem vazia recusada')
 respostas['gemini'] = PROPOSTA
 config.ANTHROPIC_API_KEY = ''
 r = perguntar(arquivos=[('fala.ogg', b'OggS\x00')])
-ok(r.status_code == 200 and chamadas[-1]['arquivos'][0]['mime'] == 'audio/ogg', 'áudio pela tela vai ao Gemini')
+ok(r.status_code == 200 and chamadas[-2]['arquivos'][0]['mime'] == 'audio/ogg', 'áudio pela tela vai ao Gemini')
+ok(not chamadas[-1]['arquivos'], 'o pedido principal recebe o áudio já em texto, sem ouvi-lo de novo')
 
 print('== RDO, LIMITE E TESTE DA IA ==')
 respostas['gemini'] = {'producao_dia': 'Concretagem.', 'clima': 'Sol', 'observacoes': ''}

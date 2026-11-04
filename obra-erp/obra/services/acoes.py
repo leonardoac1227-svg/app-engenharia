@@ -202,9 +202,22 @@ _registrar(TipoAcao(
 
 # ---------------------------------------------------------------- ponto
 
+def _equipe_inteira(d, ctx) -> list[dict]:
+    """Quem não foi citado nominalmente entra com as horas da equipe (padrão: a jornada)."""
+    citados = {inteiro(r.get("funcionario_id")) for r in d.get("registros") or [] if isinstance(r, dict)}
+    citados |= {casar_funcionario(texto(r.get("nome"), 120), ctx.funcionarios)
+                for r in d.get("registros") or [] if isinstance(r, dict)}
+    horas = valor(d.get("horas")) or config.JORNADA_HORAS
+    return [{"funcionario_id": f["id"], "nome": f["nome"], "horas": horas}
+            for f in ctx.funcionarios if f.get("ativo", 1) and f["id"] not in citados]
+
+
 def _n_ponto(d, ctx):
     registros = []
-    for r in d.get("registros") or []:
+    origem = list(d.get("registros") or [])
+    if d.get("equipe_inteira"):
+        origem += _equipe_inteira(d, ctx)
+    for r in origem:
         if not isinstance(r, dict):
             continue
         nome = texto(r.get("nome"), 120)
@@ -235,7 +248,8 @@ def _e_ponto(ex, d, arq):
 
 _registrar(TipoAcao(
     "ponto", "Ponto da equipe",
-    "data, registros: [{funcionario_id, nome, horas, justificativa}] — um por pessoa citada. "
+    "data, registros: [{funcionario_id, nome, horas, justificativa}] — um por pessoa citada; "
+    "equipe_inteira (true = todos da equipe ativa) + horas (se não for a jornada), com as exceções em registros. "
     "Jornada completa = jornada_horas; manhã e tarde (ou sem turno dito) = jornada; só um turno = metade; "
     "faltou = 0 horas com justificativa; abaixo da jornada, justificativa com o motivo dito",
     _n_ponto, _e_ponto,
@@ -701,8 +715,8 @@ ESQUEMA_DADOS = {
                            "pago_em", "meta", "formato", "mover_para_data")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
                            "parcela_id", "locacao_id", "ciclos")},
-        "valor": _N, "orcamento_previsto": _N,
-        "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B,
+        "valor": _N, "orcamento_previsto": _N, "horas": _N,
+        "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},
         "frete_datas": {"type": "array", "items": _S},
         "registros": {"type": "array", "items": {"type": "object", "properties": {

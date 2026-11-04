@@ -2,14 +2,15 @@
 """Assistente de IA da obra — da fala (ou do arquivo) ao lançamento.
 
 O gestor fala como falaria com um colega e anexa fotos, notas, comprovantes
-de PIX e áudios. Uma única chamada à IA:
+de PIX e áudios. Os áudios são transcritos antes (`transcrever`), porque é pelo
+que foi dito que se sabe de qual obra e de qual equipe o contexto precisa. Com
+a mensagem em texto, uma chamada à IA:
 
-1. transcreve os áudios;
-2. descobre de qual obra se trata (pelo nome, cliente ou endereço citado);
-3. lê os documentos e monta as **ações** do catálogo (`services/acoes.py`),
+1. descobre de qual obra se trata (pelo nome, cliente, endereço ou equipe citada);
+2. lê os documentos e monta as **ações** do catálogo (`services/acoes.py`),
    que cobre tudo que o app faz: diário, ponto, equipe, fotos, despesas,
    frete, aluguel, semana, folha, relatórios e dados da obra;
-4. responde perguntas ("quanto gastei essa semana?") com os dados do contexto.
+3. responde perguntas ("quanto gastei essa semana?") com os dados do contexto.
 
 Este módulo **não grava nada**: confere as ações contra os dados reais e o
 perfil do usuário. A gravação passa pelo `Executor`, que usa os endpoints de
@@ -20,11 +21,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date, timedelta
 
 from .. import config
 from ..db import todos, um
-from ..utils import hoje_iso, somar_dias, texto
+from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
 from . import ia_provedores
 
@@ -34,7 +36,6 @@ MAX_OBRAS_DETALHADAS = 3
 ESQUEMA = {
     "type": "object",
     "properties": {
-        "transcricao": {"type": "string"},
         "obra_id": {"type": "integer"},
         "resposta": {"type": "string"},
         "acoes": {
@@ -66,10 +67,15 @@ REGRAS GERAIS
 - Uma ação por coisa a gravar; pode haver várias ações de tipos diferentes.
 - Preencha SEMPRE os campos dentro de "dados" (valor, descricao, fornecedor, numero_nota, anexos...).
   O que você escreve em "resposta" não é gravado: só "dados" vira lançamento.
-- Áudios: transcreva fielmente em "transcricao" (corrija só pontuação e termos de obra mal ouvidos)
-  e trate o conteúdo como a mensagem do usuário. Áudio nunca vai em "anexos".
-- "obra_id": a obra de que a mensagem trata (pelo nome, apelido, cliente ou endereço citado, ou o
-  endereço impresso num documento). Se não der para saber e houver mais de uma obra, use 0.
+- Áudios chegam já transcritos na mensagem do usuário: trate a transcrição como a própria mensagem.
+  Áudio nunca vai em "anexos".
+- Execute: gere as ações do que foi dito ou do que está no documento. Não peça por escrito o que dá
+  para ler do arquivo ou deduzir do contexto.
+- "obra_id": a obra de que a mensagem trata (pelo nome, apelido, cliente ou endereço citado, pela
+  equipe citada, ou pelo endereço impresso num documento). Se não der para saber e houver mais de uma
+  obra, use 0.
+- Arquivo sem nenhuma instrução: nota, cupom, boleto ou comprovante vira despesa com o que você leu;
+  imagem da obra vira "foto" do dia de referência.
 - Perguntas ("quanto gastei?", "o que vence essa semana?", "quem faltou?"): responda em "resposta"
   com os números do contexto, sem criar ações.
 
@@ -97,6 +103,13 @@ DIÁRIO DE OBRA
 - Se o diário do dia já tem texto, devolva o texto COMPLETO mesclado, sem perder o que existia.
 - Relato do dia que cita quem trabalhou gera também o ponto.
 
+PONTO
+- "Ademir trabalhou o dia inteiro hoje", "Ademir e Ailton vieram": uma ação ponto com um registro por
+  pessoa, com jornada_horas, na data dita (sem data, data_referencia).
+- "A equipe inteira", "todo mundo", "a turma toda": equipe_inteira = true, sem listar ninguém. Quem
+  fugiu da regra ("menos o Carlos, que faltou") vai em registros com as horas dele.
+- Nome parecido com o de alguém da equipe é essa pessoa: o áudio costuma errar a grafia.
+
 FOTOS
 - Imagens da obra (não documentos) viram "foto" no dia indicado ("relatório fotográfico de ontem").
 
@@ -104,9 +117,14 @@ AÇÕES DISPONÍVEIS (tipo: quando usar / campos de "dados")
 {catalogo}
 
 FORMATO (JSON):
-{{"transcricao": "", "obra_id": 0, "resposta": "1 a 4 frases ao usuário, sem markdown",
+{{"obra_id": 0, "resposta": "1 a 4 frases ao usuário, sem markdown",
  "acoes": [{{"tipo": "...", "obra_id": 0, "resumo": "frase curta", "dados": {{...}}}}]}}
 Em "dados", inclua só os campos que se aplicam."""
+
+PROMPT_TRANSCRICAO = """Transcreva fielmente, em português do Brasil, o que é dito nestes áudios de um
+gestor de obra. Corrija só a pontuação e termos de obra mal ouvidos. Responda somente com a transcrição,
+sem comentários. Sem fala compreensível, responda apenas: INAUDIVEL
+Nomes que podem aparecer (use esta grafia): {nomes}"""
 
 PROMPT_RDO = """Você é engenheiro civil e redige o Relatório Diário de Obra (RDO).
 Com base SOMENTE nos dados do dia informados, escreva em português do Brasil, linguagem técnica e
@@ -199,9 +217,22 @@ def _obras_citadas(texto_msg: str, obras: list[dict]) -> list[int]:
             and re.search(rf"(?<!\w){re.escape(catalogo.sem_acento(o['nome']))}(?!\w)", alvo)]
 
 
+def _equipes(obras: list[dict]) -> dict[int, list[str]]:
+    """Nomes da equipe ativa de cada obra."""
+    ids = [o["id"] for o in obras]
+    equipes: dict[int, list[str]] = {i: [] for i in ids}
+    if ids:
+        for linha in todos(f"""SELECT obra_id, nome FROM funcionarios
+                                WHERE ativo = 1 AND obra_id IN ({', '.join('?' for _ in ids)})
+                                ORDER BY nome""", ids):
+            equipes[linha["obra_id"]].append(linha["nome"])
+    return equipes
+
+
 def montar_contexto(obras: list[dict], referencia: str, pode_financeiro: bool, pode_gestor: bool,
                     foco: list[int]) -> dict:
     detalhadas = (foco + [o["id"] for o in obras if o["id"] not in foco])[:MAX_OBRAS_DETALHADAS]
+    equipes = _equipes([o for o in obras if o["id"] not in detalhadas])
     return {
         "data_referencia": referencia,
         "dia_da_semana": catalogo.hoje_semana(referencia),
@@ -211,8 +242,41 @@ def montar_contexto(obras: list[dict], referencia: str, pode_financeiro: bool, p
         "categorias": config.CATEGORIAS_PADRAO,
         "reembolso_padrao": config.REEMBOLSO_PADRAO,
         "obras": [_contexto_obra(o, referencia, pode_financeiro) if o["id"] in detalhadas
-                  else {k: o.get(k) for k in ("id", "nome", "cliente", "endereco")} for o in obras],
+                  else {**{k: o.get(k) for k in ("id", "nome", "cliente", "endereco")},
+                        "equipe": equipes[o["id"]]} for o in obras],
     }
+
+
+def eh_audio(arquivo: dict) -> bool:
+    return arquivo["mime"].startswith("audio/")
+
+
+def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
+    """Áudios em texto. A grafia das obras e da equipe vai junto: é onde o áudio mais erra."""
+    audios = [a for a in arquivos if eh_audio(a)]
+    if not audios:
+        return ""
+    nomes = [o["nome"] for o in obras] + [n for equipe in _equipes(obras).values() for n in equipe]
+    bruto, _ = ia_provedores.gerar(
+        PROMPT_TRANSCRICAO.replace("{nomes}", ", ".join(dict.fromkeys(nomes))),
+        "Transcreva os áudios.", audios, None, max_tokens=4096, pensar="minimo", prazo=prazo)
+    transcricao = texto(bruto, 6000)
+    if not transcricao or catalogo.sem_acento(transcricao).strip(" .") == "inaudivel":
+        raise ApiErro("Não consegui entender o áudio. Grave de novo, mais perto do microfone, "
+                      "ou mande por texto.", 422, "audio_inaudivel")
+    return transcricao
+
+
+def _obra_da_equipe(acoes: list[dict], obras: list[dict], referencia: str) -> int:
+    """Sem obra dita: a única obra em que todos os nomes do ponto trabalham."""
+    nomes = {texto(r.get("nome"), 120) for a in acoes if a.get("tipo") == "ponto"
+             for r in (a.get("dados") or {}).get("registros") or [] if isinstance(r, dict)} - {""}
+    if not nomes:
+        return 0
+    candidatas = [o["id"] for o in obras
+                  if all(catalogo.casar_funcionario(
+                      n, catalogo.Contexto(o["id"], referencia, False, False).funcionarios) for n in nomes)]
+    return candidatas[0] if len(candidatas) == 1 else 0
 
 
 def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico: list[dict]) -> str:
@@ -225,9 +289,10 @@ def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico
     if arquivos:
         partes.append("\nARQUIVOS (índice: nome e tipo):")
         for i, a in enumerate(arquivos):
-            partes.append(f"[{i}] {a['nome']} ({a['mime']})")
+            partes.append(f"[{i}] {a['nome']} ({a['mime']})"
+                          + (" — já transcrito na mensagem" if eh_audio(a) else ""))
     partes.append("\nMENSAGEM DO USUÁRIO:")
-    partes.append(mensagem or "(sem texto — ouça os áudios e analise os anexos)")
+    partes.append(mensagem or "(sem instrução — analise os anexos)")
     return "\n".join(partes)
 
 
@@ -236,33 +301,38 @@ def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico
 def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquivos: list[dict],
                 historico: list[dict], pode_financeiro: bool, pode_gestor: bool,
                 obra_padrao: int = 0, prazo: float = ia_provedores.PRAZO_PADRAO) -> dict:
-    """Uma ida à IA: transcreve, identifica a obra e devolve as ações já conferidas.
+    """Transcreve os áudios, identifica a obra e devolve as ações já conferidas.
 
     `obras`: as obras que o usuário pode usar (na tela, só a obra aberta).
     """
     referencia = catalogo.data_ou(referencia, hoje_iso())
     ids = {o["id"] for o in obras}
+    inicio = time.monotonic()
+    transcricao = transcrever(arquivos, obras, prazo / 2)
+    mensagem = "\n".join(p for p in (mensagem, transcricao) if p)
     foco = _obras_citadas(mensagem, obras) or ([obra_padrao] if obra_padrao in ids else [])
     contexto = montar_contexto(obras, referencia, pode_financeiro, pode_gestor, foco)
     sistema = PROMPT_BASE.replace("{catalogo}", catalogo.texto_para_prompt(pode_financeiro, pode_gestor)) \
                          .replace("{{", "{").replace("}}", "}")
 
     bruto, fonte = ia_provedores.gerar(
-        sistema, _texto_pedido(mensagem, contexto, arquivos, historico), arquivos, ESQUEMA,
-        max_tokens=8192, pensar="baixo", prazo=prazo)
+        sistema, _texto_pedido(mensagem, contexto, arquivos, historico),
+        [a for a in arquivos if not eh_audio(a)], ESQUEMA,
+        max_tokens=8192, pensar="baixo", prazo=prazo - (time.monotonic() - inicio))
     bruto = bruto if isinstance(bruto, dict) else {}
+    acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:
-        obra_id = foco[0] if len(foco) == 1 else (obras[0]["id"] if len(obras) == 1 else 0)
+        obra_id = _obra_da_equipe(acoes_brutas, obras, referencia) or (
+            foco[0] if len(foco) == 1 else (obras[0]["id"] if len(obras) == 1 else 0))
 
-    acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
     por_obra: dict[int, list] = {}
     for acao in acoes_brutas:
         alvo = catalogo.inteiro(acao.get("obra_id"))
         por_obra.setdefault(alvo if alvo in ids else obra_id, []).append(acao)
 
-    resultado = {"transcricao": texto(bruto.get("transcricao"), 6000), "obra_id": obra_id,
+    resultado = {"transcricao": transcricao, "obra_id": obra_id,
                  "resposta": texto(bruto.get("resposta"), 2000), "acoes": [], "avisos": [],
                  "fonte": fonte, "modelo": ia_provedores.modelo_usado(), "data_referencia": referencia,
                  "precisa_obra": False, "acoes_sem_obra": []}

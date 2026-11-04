@@ -23,6 +23,7 @@ from obra.utils import hoje_iso
 
 bot_telegram.EM_SEGUNDO_PLANO = False
 bot_telegram.ATRASO_LOTE = 0
+bot_telegram.ATRASO_FOTO = None   # a foto sozinha é testada chamando a análise direto
 config.GEMINI_API_KEY = 'g'; config.ANTHROPIC_API_KEY = ''
 
 app = create_app(); c = app.test_client()
@@ -54,7 +55,11 @@ botoes = lambda: [b['callback_data'] for linha in (enviadas[-1].get('reply_marku
 
 # ------------------------------------------------------------------ IA simulada
 chamadas, fila_ia = [], []
+transcricoes, ouvidos = [], []
 def ia_falsa(sistema, texto, arquivos, esquema, max_tokens):
+    if sistema.startswith('Transcreva'):
+        ouvidos.append({'sistema': sistema, 'arquivos': arquivos})
+        return transcricoes.pop(0) if transcricoes else 'Áudio transcrito.'
     chamadas.append({'texto': texto, 'arquivos': arquivos})
     r = fila_ia.pop(0)
     if isinstance(r, Exception):
@@ -121,9 +126,11 @@ fila_ia[:] = [resposta(OA, 'Obra O13, 2 baldes para a concretagem; a foto é da 
     A('foto', anexos=[1], legenda='Laje', ambiente='2º pavimento')])]
 n_ia = len(chamadas)
 entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
-ok(len(chamadas) == n_ia + 1, 'áudio, nota e foto numa chamada só à IA', len(chamadas) - n_ia)
-ok([a['mime'] for a in chamadas[-1]['arquivos']] == ['image/jpeg', 'image/jpeg', 'audio/ogg'],
-   'a IA recebe as fotos e o áudio', [a['mime'] for a in chamadas[-1]['arquivos']])
+ok(len(chamadas) == n_ia + 1, 'áudio, nota e foto viram um pedido só à IA', len(chamadas) - n_ia)
+ok([a['mime'] for a in chamadas[-1]['arquivos']] == ['image/jpeg', 'image/jpeg']
+   and 'Áudio transcrito.' in chamadas[-1]['texto'],
+   'a IA recebe as fotos e o áudio em texto', [a['mime'] for a in chamadas[-1]['arquivos']])
+ok([a['mime'] for a in ouvidos[-1]['arquivos']] == ['audio/ogg'], 'o áudio vai para a transcrição')
 ok('O13' in chamadas[-1]['texto'] and 'Prédio Centro' in chamadas[-1]['texto'], 'contexto lista as obras')
 textos = [m['text'] for m in enviadas[-3:]]
 ok(any(t.startswith('⏳ Analisando 3 arquivo') for t in textos), 'avisa que está analisando', textos)
@@ -227,6 +234,118 @@ n_ia = len(chamadas)
 entregar(callback=next(b for b in botoes() if b.endswith(f':{OB}')))
 ok(len(chamadas) == n_ia and despesas(OB) and despesas(OB)[0]['anexos'] == 1,
    'escolhida a obra, grava sem nova ida à IA, com o PDF', despesas(OB))
+
+print('== FOTO SOZINHA ==')
+from obra.services import assistente
+
+def analisar_foto():
+    with app.app_context():
+        bot_telegram.analisar_sem_instrucao(app, str(CHAT))
+
+def obra_da_conversa(obra):
+    with app.app_context():
+        executar("UPDATE telegram_chats SET obra_id = ?", (obra,))
+
+n_desp = len(despesas(OA))
+entregar({'photo': [{'file_id': 'nota1'}]})
+n_ia = len(chamadas)
+fila_ia[:] = [resposta(OA, acoes=[A('despesa', descricao='Cimento 10 sacos', categoria='Material', valor=380,
+                                    fornecedor='Casa do Construtor', status_pagamento='Pago')])]
+analisar_foto()
+ok(len(chamadas) == n_ia + 1 and chamadas[-1]['arquivos'][0]['dados'] == ARQUIVOS['nota1']
+   and 'sem instrução' in chamadas[-1]['texto'], 'foto sem instrução vai para a IA', len(chamadas) - n_ia)
+d = despesas(OA)
+ok(len(d) == n_desp + 1 and d[-1]['valor'] == 380 and d[-1]['anexos'] == 1, 'nota lida e lançada com a foto', d[-1])
+ok(fila_do_chat() == 0 and fila_do_chat(False) == 0, 'foto analisada sai da fila')
+
+entregar({'photo': [{'file_id': 'nota1'}]})
+n_ia = len(chamadas)
+bot_telegram.ATRASO_FOTO = 30
+dormir = bot_telegram.time.sleep
+bot_telegram.time.sleep = lambda _s: None
+analisar_foto()
+bot_telegram.time.sleep = dormir
+bot_telegram.ATRASO_FOTO = None
+ok(len(chamadas) == n_ia and fila_do_chat() == 1, 'dentro do prazo do áudio, a foto espera')
+
+print('== NOTA E LOGO DEPOIS O ÁUDIO ==')
+fila_ia[:] = [resposta(OB, acoes=[A('despesa', descricao='Cimento — fundação', categoria='Material', valor=380,
+                                    fornecedor='Casa do Construtor', status_pagamento='Pago', anexos=[0])])]
+transcricoes[:] = ['É da obra Prédio Centro, cimento para a fundação.']
+n_desp = len(despesas(OB))
+entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
+ok('Prédio Centro' in chamadas[-1]['texto'] and chamadas[-1]['arquivos'][0]['dados'] == ARQUIVOS['nota1'],
+   'o áudio que chega no prazo vai junto com a nota')
+d = despesas(OB)
+ok(len(d) == n_desp + 1 and d[-1]['anexos'] == 1 and '🎙 Entendi: É da obra' in ultima(),
+   'lança na obra dita, com a nota, e mostra o que ouviu', ultima())
+
+print('== ÁUDIO DEPOIS DA PERGUNTA DA OBRA ==')
+obra_da_conversa(OA)
+entregar({'photo': [{'file_id': 'pix1'}]})
+fila_ia[:] = [resposta(0, acoes=[A('despesa', descricao='Areia', categoria='Material', valor=150,
+                                   fornecedor='Areal', status_pagamento='Pago', anexos=[0])])]
+n_a, n_b = len(despesas(OA)), len(despesas(OB))
+analisar_foto()
+ok('Para qual obra' in ultima() and len(despesas(OA)) == n_a,
+   'foto sem instrução não herda a obra da conversa: pergunta', ultima())
+fila_ia[:] = [resposta(OB, acoes=[A('despesa', descricao='Areia para o reboco', categoria='Material', valor=150,
+                                    fornecedor='Areal', status_pagamento='Pago', anexos=[0])])]
+transcricoes[:] = ['Essa é do Prédio Centro, areia para o reboco.']
+entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
+d = despesas(OB)
+ok(chamadas[-1]['arquivos'] and chamadas[-1]['arquivos'][0]['dados'] == ARQUIVOS['pix1'],
+   'a nota volta para a análise junto com o áudio')
+ok(len(d) == n_b + 1 and d[-1]['descricao'] == 'Areia para o reboco' and d[-1]['anexos'] == 1,
+   'o áudio responde à pergunta da obra e lança com a nota', d[-1:])
+with app.app_context():
+    ok(not [p for p in bot_telegram.vinculo(str(CHAT))['pendentes'] if p['motivo'] == 'obra'],
+       'a pergunta da obra some depois de respondida')
+ok(fila_do_chat() == 0 and fila_do_chat(False) == 0, 'arquivos da pergunta saem da fila')
+
+print('== PONTO FALADO ==')
+AILTON = c.post(f'/api/obras/{OA}/funcionarios', json={'nome': 'Ailton Reis', 'funcao': 'Servente'}, headers=H).get_json()['id']
+CARLOS = c.post(f'/api/obras/{OA}/funcionarios', json={'nome': 'Carlos Dias', 'funcao': 'Servente'}, headers=H).get_json()['id']
+BRUNO = c.post(f'/api/obras/{OB}/funcionarios', json={'nome': 'Bruno Melo', 'funcao': 'Pintor'}, headers=H).get_json()['id']
+
+def ponto_de_hoje(obra):
+    dia = next(x for x in c.get(f'/api/obras/{obra}/contexto').get_json()['dias'] if x['data'] == hoje_iso())
+    return {int(k): v for k, v in c.get(f"/api/dias/{dia['id']}/horas").get_json().items()}
+
+obra_da_conversa(OB)
+transcricoes[:] = ['Ademir e Ailton trabalharam o dia inteiro hoje.']
+fila_ia[:] = [resposta(0, acoes=[A('ponto', registros=[{'nome': 'Ademir', 'horas': 8}, {'nome': 'Ailton', 'horas': 8}])])]
+entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
+p = ponto_de_hoje(OA)
+ok(p.get(ADEMIR, {}).get('horas') == 8 and p.get(AILTON, {}).get('horas') == 8, 'ponto por nome, em áudio', p)
+ok('🏗 O13' in ultima(), 'sem obra dita: vale a obra de quem foi citado, não a da conversa', ultima())
+ok('Ademir Souza' in ouvidos[-1]['sistema'] and 'Prédio Centro' in ouvidos[-1]['sistema'],
+   'a transcrição conhece a grafia da equipe e das obras')
+
+transcricoes[:] = ['A equipe inteira esteve na obra hoje, menos o Carlos, que faltou com atestado.']
+fila_ia[:] = [resposta(OA, acoes=[A('ponto', equipe_inteira=True,
+                                    registros=[{'nome': 'Carlos', 'horas': 0, 'justificativa': 'atestado'}])])]
+entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
+p = ponto_de_hoje(OA)
+ok(p[ADEMIR]['horas'] == 8 and p[AILTON]['horas'] == 8, 'equipe inteira: todos com a jornada', p)
+ok(p[CARLOS]['horas'] == 0 and p[CARLOS]['justificativa'] == 'atestado', 'a exceção citada vale sobre a equipe', p[CARLOS])
+ok(BRUNO not in ponto_de_hoje(OA), 'equipe de outra obra fica de fora')
+
+with app.app_context():
+    obras = [{'id': i, 'nome': f'Obra {i}'} for i in (OB, OA)] + [
+        {'id': c.post('/api/obras', json={'nome': f'Extra {n}'}, headers=H).get_json()['id'], 'nome': f'Extra {n}'}
+        for n in range(3)]
+    obras.sort(key=lambda o: o['id'] != OB, reverse=True)
+    contexto = assistente.montar_contexto(obras, hoje_iso(), True, True, [])
+ok(next(o for o in contexto['obras'] if o['id'] == OB)['equipe'] == ['Bruno Melo'],
+   'obra fora do detalhe ainda mostra a equipe à IA')
+
+print('== ÁUDIO QUE NÃO DEU PARA OUVIR ==')
+n_ia = len(chamadas)
+transcricoes[:] = ['INAUDIVEL']
+entregar({'voice': {'file_id': 'voz1', 'mime_type': 'audio/ogg'}})
+ok('Não consegui entender o áudio' in ultima() and botoes()[0].startswith('re:') and len(chamadas) == n_ia,
+   'avisa em vez de fingir que entendeu', ultima())
 
 print('== RELATÓRIOS COMO ARQUIVO E COMANDOS ==')
 fila_ia[:] = [resposta(OA, acoes=[A('relatorio', formato='pdf')])]

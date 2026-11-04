@@ -88,7 +88,7 @@ obra/
     ia.py               → resumo executivo (regras + IA opcional)
     ia_provedores.py    → Gemini (gratuito) e Claude (reserva paga)
     acoes.py            → catálogo de tudo que o assistente faz (conferir, gravar, descrever)
-    assistente.py       → fala/arquivos → ações conferidas, numa chamada à IA; RDO por IA
+    assistente.py       → fala/arquivos → transcrição e ações conferidas; RDO por IA
     bot_telegram.py     → bot do Telegram: lote de arquivos, áudio, respostas e botões
     executor_acoes.py   → grava as ações (tela e bot) pelos mesmos endpoints dos formulários
     telegram_api.py     → cliente da API de bots do Telegram
@@ -490,8 +490,8 @@ Tudo que o app faz e o assistente também faz:
   não há documento ou o total está ilegível.
 - **Gravar automaticamente** (ligado por padrão): o que está completo é gravado
   na hora. Exclusão, baixa em lote, pagar folha e fechar semana sempre pedem um toque.
-- Uma única ida à IA por mensagem: ela ouve o áudio, descobre a obra, lê os
-  documentos e monta as ações juntas.
+- Áudio é transcrito numa ida à IA; com ele em texto, uma segunda ida descobre a
+  obra, lê os documentos e monta as ações juntas. Sem áudio, é uma ida só.
 - Tudo passa pelas regras dos formulários: trava de nota em duplicidade (com
   "Lançar mesmo assim"), auditoria e permissões (o mestre de obra não mexe no caixa).
 - Falou de um dia que ainda não tem semana? O gestor tem a semana criada na hora.
@@ -549,10 +549,18 @@ Funciona direto no servidor (Render): não precisa de computador ligado.
 | **Áudio do fim do dia** "Ademir fez 27 metros de reboco de manhã..." | relatório técnico por funcionário + ponto |
 | "Me manda o relatório da semana" | devolve o PDF (ou a planilha) como arquivo |
 
-- Mande os arquivos e depois o áudio ou texto (pode ser a legenda da foto). O bot
-  espera alguns segundos para juntar as fotos do mesmo envio e responde na hora
-  "⏳ Analisando...". Uma mensagem por vez por conversa.
-- Não deu para saber a obra? Pergunta com botões (sem consultar a IA de novo).
+- **Foto sozinha também é analisada.** O bot espera 30 segundos pelo áudio ou
+  texto que explica a foto; se nada chegar, lê o arquivo e lança. Áudio ou texto
+  (ou a legenda) dentro do prazo vai junto com a foto. Uma mensagem por vez por conversa.
+- **O áudio vira texto primeiro**, com a grafia das obras e da equipe como
+  referência, e a transcrição aparece em "🎙 Entendi". Áudio inaudível gera aviso,
+  não um lançamento adivinhado.
+- **Ponto falado:** "Ademir trabalhou o dia inteiro hoje", "Ademir e Ailton vieram",
+  "a equipe inteira esteve na obra, menos o Carlos". Sem obra dita, vale a obra de
+  quem foi citado.
+- Não deu para saber a obra? Pergunta com botões, e também aceita a resposta por
+  áudio ou texto, que lança a nota que estava esperando. Foto sem instrução não
+  herda a obra da conversa anterior.
 - Nota repetida: **Lançar mesmo assim**. Exclusão, baixa em lote, folha e fechar
   semana: botão de confirmação. Faltou o valor: responda só com o número.
 - **Se a IA falhar**, o bot diz o motivo e mostra **🔁 Tentar de novo**. Os
