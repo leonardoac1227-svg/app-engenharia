@@ -132,9 +132,12 @@ Deploy travado ou tela sem atualizar: **[DEPLOY.md](DEPLOY.md)**.
 Design system em `static/css/style.css`, todo em variáveis CSS — trocar a
 paleta inteira é editar o bloco `:root`.
 
-- Primária índigo→violeta em gradiente, fundo névoa, cartões brancos.
-- Raios de 14–24px, sombras difusas, pílulas de status coloridas.
+- Primária verde-sálvia, fundo areia, cartões brancos sem contorno pesado.
+- Raios de 9–22px, sombras quase imperceptíveis, pílulas de status coloridas.
 - Navegação inferior com ícones e botão flutuante de lançamento rápido.
+- **Efeito de vidro** nos botões soltos e nas barras (desfoque + brilho na
+  borda, em CSS). A regra é por posição: botão fora de cartão, lista ou modal
+  já nasce de vidro; `prefers-reduced-transparency` volta para o sólido.
 - Números em `tabular-nums` (alinham em coluna, como devem alinhar valores).
 - **Tema escuro automático** por `prefers-color-scheme`, e
   `prefers-reduced-motion` respeitado.

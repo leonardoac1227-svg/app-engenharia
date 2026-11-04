@@ -1,8 +1,9 @@
 /* ==========================================================================
    OBRA ERP v3 — SISTEMA DE DESIGN "PEDRA E SÁLVIA"
    Fundo areia quente, superfícies brancas, primária verde-sálvia discreta.
-   Cores chapadas (sem gradientes), sombras quase imperceptíveis e transições
-   curtas — o app tem que parecer leve e responder na hora ao toque.
+   Cores chapadas, sombras quase imperceptíveis e transições curtas — o app tem
+   que parecer leve e responder na hora ao toque. Botões soltos na tela (fora
+   de cartão, lista ou modal) levam o efeito de vidro: ver "VIDRO" no fim.
    Tema escuro automático via prefers-color-scheme.
    ========================================================================== */
 
@@ -13,7 +14,19 @@
   --surface-2: #FAF9F6;
   --surface-3: #EFEDE8;
   --border: #E5E2DB;
-  --border-soft: #EEECE6;
+  --border-soft: #F1EFEA;
+
+  /* ---- vidro (barras e botões soltos) ---- */
+  --barra: rgba(246, 245, 241, .74);
+  --ambiente-1: rgba(78, 110, 93, .10);
+  --ambiente-2: rgba(185, 139, 94, .09);
+  --glass-bg: rgba(255, 255, 255, .55);
+  --glass-borda: rgba(255, 255, 255, .75);
+  --glass-brilho: inset 0 1px 0 rgba(255, 255, 255, .85);
+  --glass-sombra: 0 6px 20px rgba(40, 36, 28, .09);
+  --glass-tinta: rgba(78, 110, 93, .90);
+  --glass-tinta-fab: rgba(78, 110, 93, .72);
+  --glass-perigo: rgba(184, 72, 62, .10);
 
   /* ---- primária ---- */
   --primary: #4E6E5D;
@@ -60,7 +73,7 @@
   --r-sm: 9px;
   --r-pill: 999px;
 
-  --sh-1: 0 1px 2px rgba(40, 36, 28, .04);
+  --sh-1: 0 1px 3px rgba(40, 36, 28, .03);
   --sh-2: 0 2px 8px rgba(40, 36, 28, .05);
   --sh-3: 0 12px 32px rgba(40, 36, 28, .10);
   --sh-primary: none;
@@ -84,7 +97,17 @@
     --surface-2: #222321;
     --surface-3: #2A2B28;
     --border: #33342F;
-    --border-soft: #2A2B28;
+    --border-soft: #262725;
+    --barra: rgba(20, 21, 19, .72);
+    --ambiente-1: rgba(143, 176, 157, .07);
+    --ambiente-2: rgba(185, 139, 94, .05);
+    --glass-bg: rgba(255, 255, 255, .08);
+    --glass-borda: rgba(255, 255, 255, .14);
+    --glass-brilho: inset 0 1px 0 rgba(255, 255, 255, .14);
+    --glass-sombra: 0 6px 20px rgba(0, 0, 0, .35);
+    --glass-tinta: rgba(143, 176, 157, .84);
+    --glass-tinta-fab: rgba(143, 176, 157, .72);
+    --glass-perigo: rgba(224, 138, 128, .16);
     --primary: #8FB09D;
     --primary-2: #A3C1AF;
     --primary-dark: #7A9C88;
@@ -114,15 +137,25 @@
 
 button, a, input, select, textarea, summary, label { touch-action: manipulation; }
 
+html { background: var(--bg); }
+
 html, body {
   margin: 0; padding: 0;
-  background: var(--bg);
   color: var(--text);
   font-family: var(--font);
   font-size: 16px;
   line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   overscroll-behavior-y: none;
+}
+
+/* Fundo levemente tingido: em cor 100% lisa o vidro não teria o que desfocar.
+   Fica num elemento fixo porque background-attachment: fixed falha no iOS. */
+body::before {
+  content: ''; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(70vmax 55vmax at 100% 0%, var(--ambiente-1), transparent 70%),
+    radial-gradient(70vmax 55vmax at 0% 100%, var(--ambiente-2), transparent 70%);
 }
 
 h1, h2, h3, h4 { margin: 0; font-weight: 700; letter-spacing: -.02em; }
@@ -143,7 +176,7 @@ a { color: var(--primary); text-decoration: none; font-weight: 500; }
 
 .eyebrow {
   display: block;
-  font-size: 11px; font-weight: 700; letter-spacing: .09em; text-transform: uppercase;
+  font-size: 11px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
   color: var(--text-faint);
 }
 
@@ -153,10 +186,11 @@ a { color: var(--primary); text-decoration: none; font-weight: 500; }
   position: sticky; top: 0; z-index: 40;
   display: flex; align-items: center; gap: 12px;
   height: calc(var(--topbar-h) + var(--safe-top));
-  padding: var(--safe-top) 14px 0;
-  background: var(--bg);
+  padding: var(--safe-top) 16px 0;
+  background: var(--barra);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
   color: var(--text);
-  border-bottom: 1px solid var(--border-soft);
 }
 
 .topbar-title { flex: 1; min-width: 0; }
@@ -264,13 +298,13 @@ a { color: var(--primary); text-decoration: none; font-weight: 500; }
 /* ------------------------------------------------------------ LAYOUT */
 
 .main {
-  padding: 16px 14px calc(var(--tabbar-h) + var(--safe-bottom) + 24px);
+  padding: 18px 16px calc(var(--tabbar-h) + var(--safe-bottom) + 24px);
   max-width: 780px; margin: 0 auto;
 }
 
 .section-head {
   display: flex; align-items: flex-end; justify-content: space-between; gap: 12px;
-  margin: 24px 0 12px;
+  margin: 30px 0 14px;
 }
 .section-head:first-child { margin-top: 4px; }
 .section-head h2, .section-head h3 { line-height: 1.25; }
@@ -287,8 +321,9 @@ a { color: var(--primary); text-decoration: none; font-weight: 500; }
   display: flex;
   height: calc(var(--tabbar-h) + var(--safe-bottom));
   padding-bottom: var(--safe-bottom);
-  background: var(--surface);
-  border-top: 1px solid var(--border-soft);
+  background: var(--barra);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
 }
 
 .tabbar-btn {
@@ -351,24 +386,18 @@ a { color: var(--primary); text-decoration: none; font-weight: 500; }
   box-shadow: var(--sh-1);
 }
 .kpi-label {
-  font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase;
-  color: var(--text-faint);
+  font-size: 12px; font-weight: 600;
+  color: var(--text-muted);
 }
-.kpi-valor { margin-top: 5px; font-size: 22px; font-weight: 750; letter-spacing: -.03em; }
+.kpi-valor { margin-top: 5px; font-size: 22px; font-weight: 700; letter-spacing: -.03em; }
 .kpi-valor.pequeno { font-size: 17px; }
 .kpi-sub { margin-top: 2px; font-size: 12px; color: var(--text-muted); }
 
-.kpi.destaque { background: var(--primary); border-color: transparent; }
-.kpi.destaque .kpi-label { color: var(--on-primary); opacity: .72; }
-.kpi.destaque .kpi-valor, .kpi.destaque .kpi-sub { color: var(--on-primary); }
-.kpi.destaque .kpi-sub { opacity: .85; }
+.kpi.destaque { background: var(--primary-soft); border-color: var(--primary-line); }
 
 .kpi.verde .kpi-valor { color: var(--ok); }
 .kpi.amarelo .kpi-valor { color: var(--warn); }
 .kpi.vermelho .kpi-valor { color: var(--danger); }
-.kpi.destaque.verde .kpi-valor,
-.kpi.destaque.amarelo .kpi-valor,
-.kpi.destaque.vermelho .kpi-valor { color: var(--on-primary); }
 
 /* ------------------------------------------------------------ PROGRESSO */
 
@@ -976,7 +1005,6 @@ input[type=file] { padding: 10px; font-size: 13px; color: var(--text-muted); }
   min-height: 100vh; min-height: 100dvh;
   display: grid; place-items: center;
   padding: 24px;
-  background: var(--bg);
 }
 
 .login-card {
@@ -1109,3 +1137,52 @@ input[type=file] { padding: 10px; font-size: 13px; color: var(--text-muted); }
 }
 .ia-editar { margin-top: 6px; }
 .ia-editar > summary { cursor: pointer; color: var(--primary); font-weight: 600; padding: 4px 0; }
+
+/* ------------------------------------------------------------ VIDRO */
+
+/* Botão "solto" é o que fica direto sobre a tela. Dentro de cartão, lista ou
+   modal ele já tem uma superfície atrás e continua sólido. A regra é por
+   posição, não por classe: um botão novo fora de cartão já nasce de vidro.
+   As variantes só trocam as variáveis, então não disputam especificidade. */
+.fab,
+.topbar .icon-btn,
+.topbar .avatar,
+.lightbox-fechar,
+.foto-remover,
+.view :is(.btn, .icon-mini, .chip, .dia-btn, .ia-atalho):not(
+  .card *, .kpi *, .item *, .accordion *, .staff-row *, .alerta *, .modal *, .ia-msg *
+) {
+  background: var(--vidro-fundo, var(--glass-bg));
+  border: 1px solid var(--vidro-borda, var(--glass-borda));
+  box-shadow: var(--glass-brilho), var(--glass-sombra);
+  -webkit-backdrop-filter: blur(14px) saturate(170%);
+  backdrop-filter: blur(14px) saturate(170%);
+}
+
+.btn-brass, .chip.ativo, .dia-btn.ativo { --vidro-fundo: var(--glass-tinta); }
+.btn-perigo { --vidro-fundo: var(--glass-perigo); }
+.dia-btn.hoje { --vidro-borda: var(--primary); }
+.dia-btn.pendente:not(.ativo) { --vidro-borda: var(--danger); }
+
+/* o "+" é grande: aguenta um vidro mais transparente que o texto dos botões */
+.fab { --vidro-fundo: var(--glass-tinta-fab); }
+
+/* sempre sobre foto ou fundo escuro, nos dois temas */
+.foto-remover { --vidro-fundo: rgba(17, 20, 28, .42); --vidro-borda: rgba(255, 255, 255, .24); }
+.lightbox-fechar { --vidro-fundo: rgba(255, 255, 255, .14); --vidro-borda: rgba(255, 255, 255, .24); color: #fff; }
+
+@media (hover: hover) {
+  .fab:hover,
+  .view :is(.btn, .chip, .ia-atalho):not(:disabled, .card *, .item *, .accordion *, .modal *):hover { filter: brightness(1.04); }
+}
+
+/* Quem pediu menos transparência no sistema recebe superfícies sólidas. */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --barra: var(--bg);
+    --glass-bg: var(--surface);
+    --glass-borda: var(--border);
+    --glass-tinta: var(--primary);
+    --glass-tinta-fab: var(--primary);
+  }
+}
