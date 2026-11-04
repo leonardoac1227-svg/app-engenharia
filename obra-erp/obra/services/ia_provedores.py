@@ -41,6 +41,10 @@ PRAZO_PADRAO = 100            # segundos por pedido (a tela: o gunicorn corta em
 ERROS_DE_REDE = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
 # Falhas em que vale tentar o outro modelo: o problema é daquele modelo, não da chave.
 CODIGOS_TROCA_MODELO = {404, 408, 429, 500, 502, 503, 504}
+# O Google recusa pedidos em picos de uso (503) e erros 5xx costumam passar em
+# segundos: desistir na primeira perdia o lote inteiro de fotos.
+ESPERAS_INSTAVEL = (2, 5)     # segundos antes de repetir o mesmo modelo
+PRAZO_MINIMO_REPETIR = 15     # segundos que precisam sobrar para valer repetir
 
 # Formatos que cada provedor lê. O que ficar fora é ignorado, não quebra o pedido.
 MIME_AUDIO = {"audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac",
@@ -110,7 +114,7 @@ def _falha_http(erro: urllib.error.HTTPError, modelo: str = "") -> FalhaProvedor
     elif codigo == 429:
         motivo = "limite gratuito atingido"
     elif codigo >= 500:
-        motivo = "servidor do Google instável"
+        motivo = f"servidor do Google instável (HTTP {codigo})"
     else:
         motivo = f"HTTP {codigo}" + (f": {detalhe[:120]}" if detalhe else "")
     return FalhaProvedor(motivo, codigo, detalhe)
@@ -155,22 +159,28 @@ def _gemini_enviar(modelo: str, corpo: dict, tempo: float) -> dict:
         GEMINI_URL.format(modelo=modelo), data=json.dumps(corpo).encode("utf-8"),
         headers={"content-type": "application/json", "x-goog-api-key": config.GEMINI_API_KEY},
         method="POST")
-    for tentativa in (1, 2):
+    quedas_de_rede = 0
+    esperas = list(ESPERAS_INSTAVEL)
+    while True:
         inicio = time.monotonic()
         try:
             with urllib.request.urlopen(req, timeout=tempo) as resposta:
                 return json.loads(resposta.read().decode("utf-8"))
         except urllib.error.HTTPError as erro:
-            raise _falha_http(erro, modelo) from erro
+            falha = _falha_http(erro, modelo)
+            log.warning("Gemini %s: HTTP %s: %s", modelo, falha.codigo, falha.detalhe[:300])
+            if falha.codigo < 500 or not esperas or _restante() < PRAZO_MINIMO_REPETIR:
+                raise falha from erro
+            time.sleep(esperas.pop(0))
         except ERROS_DE_REDE as erro:
             gasto = time.monotonic() - inicio
+            quedas_de_rede += 1
             # Queda rápida (conexão recusada, DNS momentâneo) merece outra
             # tentativa; tempo esgotado não — dobraria a espera.
-            if tentativa == 2 or gasto > 10:
+            if quedas_de_rede == 2 or gasto > 10:
                 raise FalhaProvedor("sem conexão: " + _motivo_rede(erro, gasto), rede=True) from erro
             log.warning("Gemini %s: falha de rede (%s), tentando de novo", modelo, erro)
             time.sleep(1.5)
-    raise FalhaProvedor("sem conexão", rede=True)
 
 
 def _gemini_modelo(modelo: str, sistema: str, partes: list, esquema: dict | None, max_tokens: int,

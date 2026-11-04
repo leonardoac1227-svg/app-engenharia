@@ -344,6 +344,43 @@ ok(pedidos[0][1]['contents'][0]['parts'][0]['inlineData']['mimeType'] == 'image/
 r = ip.testar()
 ok([x['modelo'] for x in r] == ['lite', 'flash'] and all(x['ok'] for x in r), 'teste mede cada modelo', r)
 
+print('== GOOGLE INSTÁVEL ==')
+dormidas = []
+dormir_original = ip.time.sleep
+ip.time.sleep = dormidas.append
+def instavel(vezes):
+    falta = [vezes]
+    def responder(corpo):
+        if falta[0]:
+            falta[0] -= 1
+            raise http(503, 'The model is overloaded')
+        return ok_json('{"a": 3}')
+    return responder
+pedidos.clear(); comportamento = {'lite': instavel(2)}
+res, _ = ip.gerar('s', 't', [], {'type': 'object'})
+ok(res == {'a': 3} and [p[0] for p in pedidos] == ['lite'] * 3 and dormidas == [2, 5],
+   'erro passageiro: repete o mesmo modelo com espera crescente', ([p[0] for p in pedidos], dormidas))
+pedidos.clear(); comportamento = {'lite': instavel(99)}
+res, _ = ip.gerar('s', 't', [], {'type': 'object'})
+ok(res == {'a': 1} and [p[0] for p in pedidos] == ['lite'] * 3 + ['flash'], 'modelo que não volta: passa para o reserva',
+   [p[0] for p in pedidos])
+pedidos.clear(); comportamento = {'lite': instavel(99), 'flash': instavel(99)}
+try:
+    ip.gerar('s', 't', [], {'type': 'object'}); ok(False, 'os dois modelos fora deveriam falhar')
+except ip.IaIndisponivel as erro:
+    ok('HTTP 503' in str(erro) and len(pedidos) == 6, 'os dois fora: o aviso traz o código do erro', str(erro))
+pedidos.clear(); comportamento = {'lite': instavel(99), 'flash': instavel(99)}
+try:
+    ip.gerar('s', 't', [], {'type': 'object'}, prazo=12)
+except ip.IaIndisponivel:
+    pass
+ok(len(pedidos) <= 2, 'sem prazo sobrando, não insiste', len(pedidos))
+pedidos.clear(); comportamento = {'lite': http(429, 'quota')}
+ip.gerar('s', 't', [], {'type': 'object'})
+ok([p[0] for p in pedidos] == ['lite', 'flash'], 'cota estourada não repete o mesmo modelo', [p[0] for p in pedidos])
+ip.time.sleep = dormir_original
+comportamento = {}
+
 import anthropic
 capturado = {}
 class ClienteFalso:
