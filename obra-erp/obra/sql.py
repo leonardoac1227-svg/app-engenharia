@@ -23,7 +23,7 @@ import re
 from functools import lru_cache
 
 # Tabelas sem coluna `id` — nelas não se acrescenta RETURNING id.
-TABELAS_SEM_ID = {"usuario_obras", "telegram_codigos"}
+TABELAS_SEM_ID = {"usuario_obras", "telegram_codigos", "semanas_automaticas"}
 
 _RE_INSERT_IGNORE = re.compile(r"\bINSERT\s+OR\s+IGNORE\s+INTO\b", re.I)
 _RE_COLLATE_IGUAL = re.compile(r"([\w.]+)\s*=\s*\?\s*COLLATE\s+NOCASE", re.I)
@@ -372,6 +372,13 @@ CREATE TABLE IF NOT EXISTS telegram_arquivos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_arquivos_chat ON telegram_arquivos (chat_id, lote);
+
+CREATE TABLE IF NOT EXISTS semanas_automaticas (
+    obra_id BIGINT NOT NULL REFERENCES obras (id) ON DELETE CASCADE,
+    data_inicio TEXT NOT NULL,
+    criado_em TEXT NOT NULL,
+    PRIMARY KEY (obra_id, data_inicio)
+);
 """
 
 # Todo o acesso passa pelo backend com a service key, nunca pelo navegador.
@@ -400,6 +407,7 @@ ALTER TABLE locacao_parcelas  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_chats    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_codigos  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_arquivos ENABLE ROW LEVEL SECURITY;
+ALTER TABLE semanas_automaticas ENABLE ROW LEVEL SECURITY;
 """
 
 # As sequências precisam ser reposicionadas depois de uma importação com ids

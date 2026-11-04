@@ -24,7 +24,7 @@ from ..security import (PODE_FINANCEIRO, exigir_lancamento, garantir_acesso_obra
 from ..services import assistente, ia_provedores
 from ..services.executor_acoes import ErroAcao, Executor, ordenar
 from ..utils import ApiErro, _conteudo_confere, data_iso, extensao, segunda_da_semana, texto
-from .diario import criar_semana_em
+from ..services.semanas import criar_semana_em
 
 bp = Blueprint("assistente", __name__, url_prefix="/api")
 
@@ -187,7 +187,7 @@ def dia_por_data(obra_id: int):
         raise ApiErro("Ainda não existe semana para essa data. Peça ao gestor para criá-la.", 404)
     inicio = segunda_da_semana(date.fromisoformat(alvo))
     existente = um("SELECT id FROM semanas WHERE obra_id = ? AND data_inicio = ?", (obra_id, inicio))
-    semana_id = existente["id"] if existente else criar_semana_em(obra_id, inicio)["id"]
+    semana_id = existente["id"] if existente else criar_semana_em(obra_id, inicio, usuario=usuario)["id"]
     if existente:
         from ..services.fechamento import garantir_dias
         garantir_dias(semana_id)

@@ -1,5 +1,15 @@
 # -*- coding: utf-8 -*-
-"""Exclusão de semana sem deixar o caixa de outras semanas inconsistente.
+"""Criação automática de semanas e exclusão sem estragar o caixa de outras semanas.
+
+Toda obra ativa ganha sozinha a semana que começou: quem abre o app na segunda
+já encontra a semana certa, sem passar obra por obra. Não há agendador porque
+o Render adormece o serviço sem uso e um horário marcado poderia nunca rodar.
+A conferência é feita uma vez por dia, na primeira requisição que chega, e
+completa também as semanas que ficaram para trás.
+
+`semanas_automaticas` registra o que já foi criado por obra e data. Com dois
+workers, só quem conseguir gravar o registro cria a semana, e uma semana
+excluída pelo gestor não volta sozinha na conferência seguinte.
 
 Apagar a semana leva junto tudo que foi lançado nela (dias, ponto, fotos,
 despesas, medições), pelo ON DELETE CASCADE do banco. O cuidado está no que
@@ -20,8 +30,123 @@ despesas, medições), pelo ON DELETE CASCADE do banco. O cuidado está no que
 
 from __future__ import annotations
 
-from ..db import executar, todos
+import logging
+import threading
+from datetime import date
+
+from ..db import executar, get_db, registrar_auditoria, todos, um
+from ..utils import agora_iso, hoje_iso, segunda_da_semana, somar_dias
 from .anexos_despesa import apagar_arquivos_orfaos
+from .fechamento import garantir_dias
+from .parcelamento import alocar_parcelas_agendadas
+
+log = logging.getLogger("obra-erp")
+
+USUARIO_AUTOMATICO = {"id": None, "nome": "Automático"}
+
+_trava_conferencia = threading.Lock()
+_conferido_em = None
+
+
+def criar_semana_em(obra_id: int, inicio: str, meta: str = "", orcamento: float = 0,
+                    usuario=None) -> dict:
+    """Cria a semana que começa em `inicio` (uma segunda-feira) com os seus 7 dias."""
+    ultima = um("SELECT numero FROM semanas WHERE obra_id = ? ORDER BY numero DESC LIMIT 1", (obra_id,))
+    numero_novo = (ultima["numero"] + 1) if ultima else 1
+    cur = executar(
+        """INSERT INTO semanas (obra_id, numero, data_inicio, meta, meta_atingida,
+                                orcamento_previsto, fechada, criado_em)
+           VALUES (?, ?, ?, ?, 0, ?, 0, ?)""",
+        (obra_id, numero_novo, inicio, meta, orcamento, agora_iso()),
+    )
+    semana_nova = cur.lastrowid
+    garantir_dias(semana_nova)
+    # Parcelas que vencem nesta semana estavam agendadas: passam a contar aqui.
+    parcelas = alocar_parcelas_agendadas(obra_id)
+
+    registrar_auditoria(usuario, "criou_semana", "semana", semana_nova,
+                        f"Semana {numero_novo}" + (f" · {parcelas} parcela(s) prevista(s)" if parcelas else ""))
+    return {"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
+            "parcelas_previstas": parcelas}
+
+
+def semanas_que_faltam(ultima: str | None, inicio_obra: str | None, hoje: date) -> list[str]:
+    """Segundas-feiras a criar para a obra chegar até a semana de `hoje`.
+
+    Obra sem nenhuma semana começa na semana atual, e não na data de início:
+    semanas antigas sem nada lançado só encheriam o painel de pendências. Obra
+    que ainda vai começar espera a semana dela.
+    """
+    atual = segunda_da_semana(hoje)
+    if ultima:
+        proxima = somar_dias(segunda_da_semana(date.fromisoformat(ultima)), 7)
+    elif inicio_obra and inicio_obra > somar_dias(atual, 6):
+        return []
+    else:
+        proxima = atual
+
+    faltam = []
+    while proxima <= atual:
+        faltam.append(proxima)
+        proxima = somar_dias(proxima, 7)
+    return faltam
+
+
+def _criar_semana_automatica(obra_id: int, inicio: str) -> bool:
+    reservada = executar(
+        "INSERT OR IGNORE INTO semanas_automaticas (obra_id, data_inicio, criado_em) VALUES (?, ?, ?)",
+        (obra_id, inicio, agora_iso()))
+    if not reservada.rowcount:
+        return False
+    if um("SELECT id FROM semanas WHERE obra_id = ? AND data_inicio = ?", (obra_id, inicio)):
+        return False
+    try:
+        criar_semana_em(obra_id, inicio, usuario=USUARIO_AUTOMATICO)
+    except Exception:
+        # Sem a semana, a reserva não pode ficar: a próxima conferência tenta de novo.
+        get_db().rollback()
+        executar("DELETE FROM semanas_automaticas WHERE obra_id = ? AND data_inicio = ?",
+                 (obra_id, inicio))
+        raise
+    return True
+
+
+def garantir_semanas_em_dia(hoje: date | None = None) -> int:
+    """Cria as semanas que faltam nas obras ativas. Devolve quantas foram criadas."""
+    hoje = hoje or date.today()
+    obras = todos(
+        """SELECT o.id, o.data_inicio,
+                  (SELECT MAX(s.data_inicio) FROM semanas s WHERE s.obra_id = o.id) AS ultima
+             FROM obras o WHERE o.arquivada = 0 AND o.status = 'ativa'""")
+    criadas = 0
+    for obra in obras:
+        try:
+            for inicio in semanas_que_faltam(obra["ultima"], obra["data_inicio"], hoje):
+                criadas += 1 if _criar_semana_automatica(obra["id"], inicio) else 0
+        except Exception:  # noqa: BLE001 — uma obra com problema não trava as outras
+            get_db().rollback()
+            log.exception("Falha ao criar semanas automáticas da obra %s.", obra["id"])
+    return criadas
+
+
+def conferir_semanas_do_dia() -> None:
+    """Roda `garantir_semanas_em_dia` uma vez por dia em cada processo."""
+    global _conferido_em
+    hoje = hoje_iso()
+    if _conferido_em == hoje:
+        return
+    with _trava_conferencia:
+        if _conferido_em == hoje:
+            return
+        try:
+            criadas = garantir_semanas_em_dia()
+        except Exception:  # noqa: BLE001 — não pode derrubar a requisição do usuário
+            get_db().rollback()
+            log.exception("Falha na conferência diária das semanas.")
+            return
+        _conferido_em = hoje
+    if criadas:
+        log.info("%d semana(s) criada(s) automaticamente.", criadas)
 
 
 def _marcas(ids) -> str:

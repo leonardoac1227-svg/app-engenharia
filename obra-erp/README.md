@@ -144,6 +144,24 @@ paleta inteira é editar o bloco `:root`.
 
 ---
 
+## Semanas automáticas
+
+Toda obra **ativa** ganha sozinha a semana que começou na segunda, e as semanas
+que tenham ficado para trás são completadas com a numeração em sequência. Obra
+sem nenhuma semana começa na atual; obra pausada, concluída, arquivada ou que
+ainda vai começar não recebe nada.
+
+- **Sem agendador, de propósito.** O Render adormece o serviço sem uso, então
+  um horário marcado poderia nunca rodar. A conferência acontece uma vez por
+  dia, na primeira requisição que chega (app, bot ou `/health`).
+- **Excluir uma semana vale.** Semana criada automaticamente e excluída pelo
+  gestor não volta na conferência seguinte; a tabela `semanas_automaticas`
+  guarda o que já foi criado e impede duplicar com dois workers.
+- Na auditoria, o autor aparece como **Automático**. O botão **+ Semana**
+  continua existindo para criar uma semana em outra data.
+
+---
+
 ## Metas da semana
 
 Meta não é texto solto: tem nome, percentual e história.

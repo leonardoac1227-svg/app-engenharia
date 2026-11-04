@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.9.0"
+__version__ = "3.10.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -81,6 +81,13 @@ def create_app() -> Flask:
         logging.getLogger(__name__).exception("Falha ao realocar parcelas.")
 
     # ------------------------------------------------------------ middlewares
+
+    from .services.semanas import conferir_semanas_do_dia
+
+    @app.before_request
+    def _semanas_em_dia():
+        if not request.path.startswith("/static"):
+            conferir_semanas_do_dia()
 
     @app.before_request
     def _protecao_csrf():

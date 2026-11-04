@@ -620,6 +620,14 @@ CREATE TABLE IF NOT EXISTS telegram_arquivos (
 );
 
 CREATE INDEX IF NOT EXISTS idx_telegram_arquivos_chat ON telegram_arquivos (chat_id, lote);
+
+CREATE TABLE IF NOT EXISTS semanas_automaticas (
+    obra_id INTEGER NOT NULL,
+    data_inicio TEXT NOT NULL,
+    criado_em TEXT NOT NULL,
+    PRIMARY KEY (obra_id, data_inicio),
+    FOREIGN KEY (obra_id) REFERENCES obras (id) ON DELETE CASCADE
+);
 """
 
 # Colunas acrescentadas depois da v1 do app. Bancos criados pelo SCHEMA acima

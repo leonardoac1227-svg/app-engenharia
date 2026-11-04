@@ -17,7 +17,7 @@ sys.path.insert(0, RAIZ)
 sys.path.insert(0, os.path.join(RAIZ, "ferramentas"))
 
 import psycopg_falso
-BANCO = '/tmp/pg_antigo.db'
+BANCO = os.path.join(tempfile.gettempdir(), 'pg_antigo.db')
 psycopg_falso.instalar(BANCO)
 
 falhas = []

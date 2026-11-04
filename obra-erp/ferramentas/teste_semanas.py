@@ -129,5 +129,83 @@ cm = app.test_client(); cm.post('/api/auth/login', json={'email':'ms@obra.local'
 HM = {'X-CSRF-Token': cm.get('/api/sessao').get_json()['csrf']}
 ok(cm.delete(f'/api/semanas/{S3}', headers=HM).status_code == 403, 'mestre não exclui semana')
 
+print('== SEMANAS AUTOMÁTICAS ==')
+from datetime import date
+from obra.services import semanas as servico
+from obra.services.semanas import garantir_semanas_em_dia, semanas_que_faltam
+
+ok(semanas_que_faltam('2026-09-28', None, date(2026, 10, 12)) == ['2026-10-05', '2026-10-12'],
+   'semanas que ficaram para trás também entram')
+ok(semanas_que_faltam('2026-10-12', None, date(2026, 10, 18)) == [],
+   'domingo ainda é a mesma semana: nada a criar')
+ok(semanas_que_faltam('2026-10-12', None, date(2026, 10, 19)) == ['2026-10-19'],
+   'na segunda nasce a semana nova')
+ok(semanas_que_faltam('2026-12-07', None, date(2026, 10, 19)) == [],
+   'semana cadastrada no futuro não recua')
+ok(semanas_que_faltam(None, None, date(2026, 10, 21)) == ['2026-10-19'],
+   'obra sem semana começa na semana atual')
+ok(semanas_que_faltam(None, '2026-11-02', date(2026, 10, 21)) == [],
+   'obra que ainda vai começar espera')
+
+def obra_nova(nome, **campos):
+    return c.post('/api/obras', json={'nome': nome, **campos}, headers=H).get_json()['id']
+
+def inicios(obra):
+    return [s['data_inicio'] for s in c.get(f'/api/obras/{obra}/semanas').get_json()]
+
+def conferir(hoje):
+    with app.test_request_context():
+        return garantir_semanas_em_dia(hoje)
+
+c.delete(f'/api/obras/{O}', headers=H)
+
+ATIVA = obra_nova('Ativa')
+c.post(f'/api/obras/{ATIVA}/semanas', json={'data_inicio': '2026-09-28'}, headers=H)
+VAZIA = obra_nova('Vazia', data_inicio='2026-09-01')
+PAUSADA = obra_nova('Pausada')
+c.post(f'/api/obras/{PAUSADA}/semanas', json={'data_inicio': '2026-09-28'}, headers=H)
+c.put(f'/api/obras/{PAUSADA}', json={'status': 'pausada'}, headers=H)
+ARQUIVADA = obra_nova('Arquivada')
+c.post(f'/api/obras/{ARQUIVADA}/semanas', json={'data_inicio': '2026-09-28'}, headers=H)
+c.put(f'/api/obras/{ARQUIVADA}', json={'arquivada': True}, headers=H)
+
+SEGUNDA = date(2026, 10, 12)
+conferir(SEGUNDA)
+ok(inicios(ATIVA) == ['2026-09-28', '2026-10-05', '2026-10-12'], 'obra ativa fica em dia', inicios(ATIVA))
+ok(inicios(VAZIA) == ['2026-10-12'], 'obra sem semana ganha a atual', inicios(VAZIA))
+ok(inicios(PAUSADA) == ['2026-09-28'], 'obra pausada não ganha semana', inicios(PAUSADA))
+ok(inicios(ARQUIVADA) == ['2026-09-28'], 'obra arquivada não ganha semana', inicios(ARQUIVADA))
+
+semanas_ativa = c.get(f'/api/obras/{ATIVA}/semanas').get_json()
+ok([s['numero'] for s in semanas_ativa] == [1, 2, 3], 'numeração segue a sequência', semanas_ativa)
+ok(len(dias(semanas_ativa[-1]['id'])) == 7, 'semana automática nasce com os 7 dias')
+
+ok(conferir(SEGUNDA) == 0 and len(inicios(ATIVA)) == 3, 'conferir de novo não duplica')
+
+c.delete(f"/api/semanas/{semanas_ativa[-1]['id']}", headers=H)
+conferir(SEGUNDA)
+ok(inicios(ATIVA) == ['2026-09-28', '2026-10-05'], 'semana excluída pelo gestor não volta sozinha', inicios(ATIVA))
+conferir(date(2026, 10, 19))
+ok(inicios(ATIVA)[-1] == '2026-10-19', 'a segunda seguinte continua normalmente', inicios(ATIVA))
+
+with app.test_request_context():
+    from obra.db import executar as sql
+    ok(not sql("INSERT OR IGNORE INTO semanas_automaticas (obra_id, data_inicio, criado_em) VALUES (?, ?, ?)",
+               (ATIVA, '2026-10-19', 'agora')).rowcount, 'só um processo consegue reservar a mesma semana')
+
+criar_original = servico.criar_semana_em
+def falha(*_a, **_k): raise RuntimeError('banco fora')
+servico.criar_semana_em = falha
+conferir(date(2026, 10, 26))
+servico.criar_semana_em = criar_original
+ok('2026-10-26' not in inicios(ATIVA), 'falha não cria semana pela metade')
+conferir(date(2026, 10, 26))
+ok('2026-10-26' in inicios(ATIVA), 'depois de uma falha a conferência tenta de novo', inicios(ATIVA))
+
+with app.test_request_context():
+    from obra.db import um as linha
+    auditoria = linha("SELECT usuario_nome FROM auditoria WHERE acao = 'criou_semana' ORDER BY id DESC LIMIT 1")
+ok(auditoria['usuario_nome'] == 'Automático', 'auditoria registra que foi automático', dict(auditoria))
+
 print('\n' + ('SEMANAS OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

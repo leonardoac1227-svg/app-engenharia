@@ -13,7 +13,7 @@ from ..security import (exigir_financeiro, exigir_lancamento, garantir_acesso_ob
                         obra_da_semana, obra_do_dia, papel_obrigatorio, usuario_atual)
 from ..services.fechamento import garantir_dias, listar_dias
 from ..services.parcelamento import alocar_parcelas_agendadas, sql_fora_da_semana
-from ..services.semanas import excluir_semana
+from ..services.semanas import criar_semana_em, excluir_semana
 from ..utils import (ApiErro, formatar_bytes, agora_iso, data_iso, hoje_iso, numero, remover_anexo, salvar_anexo,
                      segunda_da_semana, somar_dias, texto)
 
@@ -82,29 +82,9 @@ def criar_semana(obra_id: int):
 
     criada = criar_semana_em(
         obra_id, inicio, texto(dados.get("meta"), 400),
-        numero(dados.get("orcamento_previsto"), 0, 0, campo="o orçamento previsto"))
+        numero(dados.get("orcamento_previsto"), 0, 0, campo="o orçamento previsto"),
+        usuario=usuario_atual())
     return jsonify(criada), 201
-
-
-def criar_semana_em(obra_id: int, inicio: str, meta: str = "", orcamento: float = 0) -> dict:
-    """Cria a semana que começa em `inicio` (uma segunda-feira) com os seus 7 dias."""
-    ultima = um("SELECT numero FROM semanas WHERE obra_id = ? ORDER BY numero DESC LIMIT 1", (obra_id,))
-    numero_novo = (ultima["numero"] + 1) if ultima else 1
-    cur = executar(
-        """INSERT INTO semanas (obra_id, numero, data_inicio, meta, meta_atingida,
-                                orcamento_previsto, fechada, criado_em)
-           VALUES (?, ?, ?, ?, 0, ?, 0, ?)""",
-        (obra_id, numero_novo, inicio, meta, orcamento, agora_iso()),
-    )
-    semana_nova = cur.lastrowid
-    garantir_dias(semana_nova)
-    # Parcelas que vencem nesta semana estavam agendadas: passam a contar aqui.
-    parcelas = alocar_parcelas_agendadas(obra_id)
-
-    registrar_auditoria(usuario_atual(), "criou_semana", "semana", semana_nova,
-                        f"Semana {numero_novo}" + (f" · {parcelas} parcela(s) prevista(s)" if parcelas else ""))
-    return {"id": semana_nova, "numero": numero_novo, "data_inicio": inicio,
-            "parcelas_previstas": parcelas}
 
 
 @bp.put("/semanas/<int:semana_id>")
