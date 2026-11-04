@@ -24,6 +24,7 @@ from typing import Callable
 from .. import config
 from ..db import todos, um
 from ..utils import data_br, data_iso, moeda, numero, texto
+from .padroes import completar
 
 FREQ_PARCELA = ("semanal", "quinzenal", "mensal")
 FREQ_LOCACAO = ("diaria", "semanal", "quinzenal", "mensal")
@@ -52,6 +53,11 @@ class Contexto:
                 "SELECT id, nome, funcao, ativo FROM funcionarios WHERE obra_id = ? ORDER BY nome",
                 (self.obra_id,))]
         return self._funcionarios
+
+    @property
+    def obra_nome(self) -> str:
+        linha = um("SELECT nome FROM obras WHERE id = ?", (self.obra_id,))
+        return linha["nome"] if linha else ""
 
 
 # ---------------------------------------------------------------- conversões
@@ -356,6 +362,7 @@ _registrar(TipoAcao(
 # ---------------------------------------------------------------- despesas
 
 def _n_despesa(d, ctx):
+    d = completar(d, ctx.obra_nome)
     status = status_pagamento(d.get("status_pagamento")) or "Em Aberto"
     parcelas = inteiro(d.get("parcelas"))
     frequencia = sem_acento(str(d.get("parcela_frequencia") or ""))

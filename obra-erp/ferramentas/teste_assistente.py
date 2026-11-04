@@ -122,6 +122,7 @@ from obra.services import assistente as srv
 props = srv.ESQUEMA['properties']['acoes']['items']['properties']['dados'].get('properties', {})
 ok({'valor', 'descricao', 'fornecedor', 'numero_nota', 'anexos', 'registros', 'alteracoes'} <= set(props),
    'esquema enviado ao Gemini declara os campos de "dados" (sem isso ele devolvia {})', sorted(props))
+contexto_app = app.app_context(); contexto_app.push()   # a conferência consulta a obra
 ctx = acoes.Contexto(O, '2026-08-03', True, True, [{'nome': 'a.jpg', 'mime': 'image/jpeg'}])
 conf, _ = acoes.normalizar([{'tipo': 'despesa', 'resumo': '2 baldes de aço para concretagem', 'dados': {},
                              'valor_total': '64,00', 'supplier': 'Almeida e Caires', 'nota': 'ORC 31797',
@@ -143,6 +144,8 @@ lista, _ = acoes.normalizar([A('despesa', descricao='A', valor=1), A('despesa', 
                             acoes.Contexto(O, '2026-08-03', True, True, arqs[:2]))
 srv._garantir_anexos(lista, arqs[:2])
 ok([a['dados']['anexos'] for a in lista] == [[0], [1]], 'duas despesas e dois arquivos: um para cada')
+
+contexto_app.pop()
 
 print('== SEM CHAVE ==')
 config.GEMINI_API_KEY = ''; config.ANTHROPIC_API_KEY = ''

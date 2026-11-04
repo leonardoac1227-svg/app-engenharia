@@ -170,11 +170,11 @@ ok('já foi lançada' in ultima() and botoes()[0].startswith('ok:'), 'nota repet
 n_desp = len(despesas(OA))
 entregar(callback=botoes()[0])
 ok(len(despesas(OA)) == n_desp + 1 and despesas(OA)[-1]['anexos'] == 1, 'botão lança, com o comprovante')
-fila_ia[:] = [resposta(OA, acoes=[A('despesa', descricao='Frete da areia', categoria='Frete', status_pagamento='Pago')])]
-entregar({'text': 'paguei o frete da areia'})
+fila_ia[:] = [resposta(OA, acoes=[A('despesa', descricao='Carreto de telhas', categoria='Material', status_pagamento='Pago')])]
+entregar({'text': 'paguei o carreto das telhas'})
 ok('faltou valor' in ultima(), 'pede o valor que faltou', ultima())
 entregar({'text': 'R$ 350,00'})
-ok(despesas(OA)[-1]['descricao'] == 'Frete da areia' and despesas(OA)[-1]['valor'] == 350, 'valor respondido grava')
+ok(despesas(OA)[-1]['descricao'] == 'Carreto de telhas' and despesas(OA)[-1]['valor'] == 350, 'valor respondido grava')
 alvo = despesas(OA)[-1]['id']
 fila_ia[:] = [resposta(OA, acoes=[A('excluir_despesa', despesa_id=alvo)])]
 entregar({'text': 'apaga o frete'})

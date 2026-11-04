@@ -28,7 +28,7 @@ from .. import config
 from ..db import todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
-from . import ia_provedores
+from . import ia_provedores, padroes
 
 MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
@@ -94,6 +94,14 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
   despesa a que se refere — o usuário quer o arquivo salvo junto com o lançamento.
 - Mesma nota (número e fornecedor) já nos lançamentos do contexto, ou PIX de uma conta em aberto
   igual: NÃO crie outra — use editar_despesa (anexando o comprovante) ou pagar_despesa.
+
+PADRÕES DA EMPRESA (fala curta já é o lançamento completo: preencha "dados" por estas regras)
+{padroes}
+- Valor que o usuário disser ou que estiver no documento vale mais que o valor do padrão. Usar o valor
+  do padrão não é inventar. Nestes casos o status do padrão vale mais que a forma de pagamento impressa.
+- "padroes_recentes" do contexto mostra o que mais se repete: siga a mesma escrita de descrição,
+  fornecedor, categoria e status em lançamentos parecidos, mas só use o valor dali se a fala não trouxer
+  valor e ele for sempre o mesmo.
 
 DIÁRIO DE OBRA
 - Linguagem técnica de engenharia, impessoal ("Executada a concretagem da laje do 2º pavimento...").
@@ -234,6 +242,7 @@ def montar_contexto(obras: list[dict], referencia: str, pode_financeiro: bool, p
     detalhadas = (foco + [o["id"] for o in obras if o["id"] not in foco])[:MAX_OBRAS_DETALHADAS]
     equipes = _equipes([o for o in obras if o["id"] not in detalhadas])
     return {
+        "padroes_recentes": padroes.repetidos([o["id"] for o in obras], referencia) if pode_financeiro else [],
         "data_referencia": referencia,
         "dia_da_semana": catalogo.hoje_semana(referencia),
         "jornada_horas": config.JORNADA_HORAS,
@@ -313,6 +322,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     foco = _obras_citadas(mensagem, obras) or ([obra_padrao] if obra_padrao in ids else [])
     contexto = montar_contexto(obras, referencia, pode_financeiro, pode_gestor, foco)
     sistema = PROMPT_BASE.replace("{catalogo}", catalogo.texto_para_prompt(pode_financeiro, pode_gestor)) \
+                         .replace("{padroes}", padroes.texto_para_prompt() if pode_financeiro else "(não se aplica)") \
                          .replace("{{", "{").replace("}}", "}")
 
     bruto, fonte = ia_provedores.gerar(

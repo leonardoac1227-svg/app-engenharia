@@ -88,6 +88,7 @@ obra/
     ia.py               → resumo executivo (regras + IA opcional)
     ia_provedores.py    → Gemini (gratuito) e Claude (reserva paga)
     acoes.py            → catálogo de tudo que o assistente faz (conferir, gravar, descrever)
+    padroes.py          → lançamentos repetitivos da empresa (fornecedor, valor, status)
     assistente.py       → fala/arquivos → transcrição e ações conferidas; RDO por IA
     bot_telegram.py     → bot do Telegram: lote de arquivos, áudio, respostas e botões
     executor_acoes.py   → grava as ações (tela e bot) pelos mesmos endpoints dos formulários
@@ -499,6 +500,25 @@ Tudo que o app faz e o assistente também faz:
   que já foi lançado. O RDO sai no PDF semanal.
 - **Ajustes → Assistente de IA → Testar IA** (ou `/teste` no bot) mostra se cada
   modelo responde e em quanto tempo, ou o motivo exato da falha.
+
+### Padrões de lançamento
+
+Fala curta já é o lançamento completo. As regras vieram do histórico real e
+ficam em `services/padroes.py`:
+
+| Fala | Fornecedor | Valor | Status |
+|---|---|---|---|
+| "caixa de entulho" (qualquer obra) | SOS Entulho | R$ 1 por caixa | Em Aberto |
+| "frete referente a..." | Diego motoboy | R$ 30 | Em Aberto |
+| "3 metros de areia" no I19 | Hitalo | R$ 1 | Em Aberto |
+| areia ou agregados no O13 e T21 | Somar | o da nota | Em Aberto |
+| "cimento" (compra) | sem fornecedor, sempre 50 sacos | R$ 2.200 | Em Aberto |
+| "cimento vindo do O13" | sem fornecedor | R$ 1 | Em Aberto |
+| escoras (contrato + boleto) | o do contrato | o do boleto | conforme o boleto |
+
+Valor falado ou lido de uma nota vale mais que o padrão. O servidor completa o
+que a IA deixar vazio, e o que mais se repetiu nos últimos 120 dias vai no
+contexto para a IA seguir a mesma escrita, sem precisar virar regra.
 
 ### Configurar (5 minutos)
 
