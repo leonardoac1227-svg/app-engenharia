@@ -59,6 +59,7 @@ class Executor:
         self.dias: dict[str, int] = {}
         self.semanas: dict[str, int] = {}
         self.novos: dict[str, int] = {}
+        self.criadas: list[int] = []
 
     # ------------------------------------------------------------ http interno
 

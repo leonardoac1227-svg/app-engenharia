@@ -160,5 +160,67 @@ ok(d and d[-1]['fornecedor'] == 'Hitalo' and d[-1]['valor'] == 1 and d[-1]['stat
 ok('Hitalo' in pedidos[-1]['sistema'] and 'SOS Entulho' in pedidos[-1]['sistema'], 'a IA recebe as regras')
 ok('padroes_recentes' in pedidos[-1]['texto'], 'a IA recebe o que mais se repetiu')
 
+print('== RECIBO ANTIGO ENTRA NA SEMANA ATUAL ==')
+import re
+
+def lancamento(despesa_id):
+    with app.app_context():
+        from obra.db import um
+        linha = um("""SELECT x.descricao, x.fornecedor, x.numero_nota, x.valor, d.data, s.obra_id
+                        FROM despesas x JOIN dias d ON d.id = x.dia_id JOIN semanas s ON s.id = d.semana_id
+                       WHERE x.id = ?""", (despesa_id,))
+    return dict(linha) if linha else None
+
+def ultimo_id():
+    return int(re.findall(r'#(\d+)', enviadas[-1]['text'])[-1])
+
+BOMBA = {'tipo': 'despesa', 'dados': {
+    'data': '2025-01-08', 'categoria': 'Material', 'descricao': 'Bomba para esvaziar a piscina - Recibo 1191',
+    'fornecedor': 'CASA DO CONSTRUTOR - FEIRA DE SANTANA', 'valor': 129, 'status_pagamento': 'Em Aberto'}}
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [json.loads(json.dumps(BOMBA))]}]
+entregar({'text': 'Lance na obra do I19, bomba para esvaziar piscina, nota em aberto'})
+ID = ultimo_id()
+d = lancamento(ID)
+ok(d['data'] == hoje_iso(), 'sem data dita, entra hoje e não na data do recibo', d)
+ok(d['numero_nota'] == 'REC 1191' and d['descricao'] == 'Bomba para esvaziar a piscina',
+   'o número do recibo sai da descrição e vai para o campo da nota', d)
+ok(d['fornecedor'] == 'Casa do Construtor', 'nome do fornecedor padronizado', d)
+ok('⚠️' not in enviadas[-1]['text'], 'na semana atual não há aviso', enviadas[-1]['text'])
+
+n = len(despesas(I19))
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [json.loads(json.dumps(BOMBA))]}]
+entregar({'text': 'lança de novo esse recibo'})
+ok(len(despesas(I19)) == n and 'já foi lançada' in enviadas[-1]['text'], 'o mesmo recibo não entra duas vezes', enviadas[-1]['text'])
+
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [
+    {'tipo': 'despesa', 'dados': {'data': '2025-01-08', 'descricao': 'Lixa', 'valor': 9, 'fornecedor': 'Loja'}}]}]
+entregar({'text': 'lixa, do dia 08/01/2025, no I19'})
+ok(lancamento(ultimo_id())['data'] == '2025-01-08' and 'Entrou na semana de 06/01/2025' in enviadas[-1]['text'],
+   'data dita é respeitada e o bot avisa que foi para outra semana', enviadas[-1]['text'])
+
+print('== CORRIGIR LANÇAMENTO ==')
+fila_ia[:] = [{'obra_id': O13, 'resposta': 'Corrigido.', 'acoes': [
+    {'tipo': 'editar_despesa', 'obra_id': O13, 'dados': {'despesa_id': ID, 'alteracoes': {'valor': 150}}}]}]
+entregar({'text': 'o valor daquela bomba é 150'})
+ok(lancamento(ID)['valor'] == 150 and '✅ Corrigido' in enviadas[-1]['text'],
+   'corrige mesmo com a conversa em outra obra', enviadas[-1]['text'])
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Movido.', 'acoes': [
+    {'tipo': 'editar_despesa', 'dados': {'despesa_id': ID, 'alteracoes': {'mover_para_obra': O13}}}]}]
+entregar({'text': 'esse lançamento é do O13'})
+ok(lancamento(ID)['obra_id'] == O13 and 'movido para a obra O13' in enviadas[-1]['text'],
+   'lançamento muda de obra', enviadas[-1]['text'])
+with app.app_context():
+    from obra.db import um
+    ok(pedidos and 'mover_para_obra' in pedidos[-1]['sistema'], 'a IA sabe mudar de obra')
+    dia_o13 = um("""SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
+                     WHERE s.obra_id = ? AND d.data = ?""", (O13, hoje_iso()))['id']
+    dia_i19 = um("""SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
+                     WHERE s.obra_id = ? AND d.data = ?""", (I19, hoje_iso()))['id']
+parcelada = c.post(f'/api/dias/{dia_o13}/despesas', data={'categoria': 'Material', 'descricao': 'Tinta', 'valor': '300',
+                   'status_pagamento': 'Em Aberto', 'vencimento': hoje_iso(), 'parcelas': '3', 'parcela_frequencia': 'semanal'},
+                   headers=H, content_type='multipart/form-data').get_json()['id']
+r = c.post(f'/api/despesas/{parcelada}/mover-obra', json={'dia_id': dia_i19}, headers=H)
+ok(r.status_code == 400 and 'parcelas' in r.get_json()['erro'], 'parcela não muda de obra sozinha', r.get_json())
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

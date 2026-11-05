@@ -87,6 +87,7 @@ FORNECEDORES = (
     (r"diego\b.*", "Diego motoboy"),
     (r"sos\b.*", "SOS Entulho"),
     (r"bahia copiadora", "Bahia copiadora"),
+    (r"casa do construtor\b.*", "Casa do Construtor"),
     (r"somar\b.*", "Somar"),
     (r"central da construcao", "Central da construção"),
     (r"o engenheiro", "O engenheiro"),
@@ -95,6 +96,10 @@ FORNECEDORES = (
     (r"locmaq", "LOCMAQ"),
     (r"locknal", "Locknal"),
 )
+
+_NUMERO_NA_DESCRICAO = re.compile(
+    r"[\s\-–·,(]*\b(recibo|nota fiscal|nota|nf-?e?|or[cç]amento|orc)\b\s*(?:n[º°o.]*\s*)?(\d{2,})\)?", re.I)
+_PREFIXO_NUMERO = {"rec": "REC", "orc": "ORC", "orç": "ORC"}
 
 # Status quando nem o gestor nem o documento disseram outra coisa.
 LOJAS_REEMBOLSO = ("O engenheiro", "Renova", "Uniformizar", "Bahia copiadora")
@@ -106,6 +111,20 @@ def fornecedor_padrao(nome) -> str:
         if re.fullmatch(grafia, alvo):
             return oficial
     return texto(nome, 120)
+
+
+def _separar_numero(saida: dict) -> None:
+    """Número do documento escrito na descrição vai para o campo próprio.
+
+    A trava de nota repetida só olha `numero_nota`: "Bomba - Recibo 1191" na
+    descrição deixava a mesma nota entrar duas vezes.
+    """
+    achado = _NUMERO_NA_DESCRICAO.search(texto(saida.get("descricao"), 200))
+    if not achado or texto(saida.get("numero_nota"), 40):
+        return
+    prefixo = _PREFIXO_NUMERO.get(_chave(achado.group(1))[:3], "")
+    saida["numero_nota"] = f"{prefixo} {achado.group(2)}".strip()
+    saida["descricao"] = texto(saida["descricao"], 200).replace(achado.group(0), "").strip(" -–·,")
 
 
 def _vazio(valor) -> bool:
@@ -130,6 +149,7 @@ def _padrao_de(alvo: str, fornecedor: str, obra: str) -> Padrao | None:
 def completar(dados: dict, nome_obra: str) -> dict:
     """Devolve os dados da despesa com o que faltava preenchido pelo padrão."""
     saida = dict(dados)
+    _separar_numero(saida)
     fornecedor = fornecedor_padrao(saida.get("fornecedor"))
     alvo = _chave(saida.get("descricao"))
     padrao = _padrao_de(" ".join(p for p in (alvo, _chave(fornecedor)) if p), fornecedor, _chave(nome_obra))

@@ -257,6 +257,32 @@ def atualizar(despesa_id: int):
     return jsonify({"ok": True})
 
 
+@bp.post("/despesas/<int:despesa_id>/mover-obra")
+def mover_de_obra(despesa_id: int):
+    """Lançado na obra errada. Parcela, frete em grupo, aluguel e medição ficam de fora:
+    dependem de outros registros da obra e precisam ser refeitos à mão."""
+    usuario = exigir_financeiro()
+    origem = obra_da_despesa(despesa_id)
+    dados = request.get_json(silent=True) or {}
+    novo_dia = int(numero(dados.get("dia_id"), 0, 1, campo="o dia"))
+    destino = obra_do_dia(novo_dia)
+    if destino == origem:
+        raise ApiErro("O lançamento já é desta obra.")
+
+    atual = um("SELECT grupo_parcela FROM despesas WHERE id = ?", (despesa_id,))
+    ligado = atual["grupo_parcela"] or um(
+        """SELECT 1 AS x FROM locacao_parcelas WHERE despesa_id = ?
+           UNION ALL SELECT 1 AS x FROM contrato_medicoes WHERE despesa_id = ?""",
+        (despesa_id, despesa_id))
+    if ligado:
+        raise ApiErro("Este lançamento está ligado a parcelas, aluguel ou medição. "
+                      "Exclua e lance de novo na obra certa.")
+
+    executar("UPDATE despesas SET dia_id = ? WHERE id = ?", (novo_dia, despesa_id))
+    registrar_auditoria(usuario, "moveu_despesa_de_obra", "despesa", despesa_id, f"obra {origem} → {destino}")
+    return jsonify({"ok": True})
+
+
 @bp.post("/despesas/<int:despesa_id>/anexos")
 def adicionar_anexos(despesa_id: int):
     """Acrescenta arquivos a um lançamento que já existe."""

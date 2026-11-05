@@ -371,7 +371,12 @@ pedidos.clear(); comportamento = {'lite': instavel(99), 'flash': instavel(99)}
 try:
     ip.gerar('s', 't', [], {'type': 'object'}); ok(False, 'os dois modelos fora deveriam falhar')
 except ip.IaIndisponivel as erro:
-    ok('HTTP 503' in str(erro) and len(pedidos) == 6, 'os dois fora: o aviso traz o código do erro', str(erro))
+    ok('HTTP 503' in str(erro) and len(pedidos) == 12 and str(erro).count('flash') == 1,
+       'os dois fora: faz uma segunda rodada e o aviso traz o código do erro', (len(pedidos), str(erro)))
+pedidos.clear(); comportamento = {'lite': instavel(4), 'flash': instavel(99)}
+res, _ = ip.gerar('s', 't', [], {'type': 'object'})
+ok(res == {'a': 3} and [p[0] for p in pedidos][-1] == 'lite', 'a demanda baixou: a segunda rodada resolve sozinha',
+   [p[0] for p in pedidos])
 pedidos.clear(); comportamento = {'lite': instavel(99), 'flash': instavel(99)}
 try:
     ip.gerar('s', 't', [], {'type': 'object'}, prazo=12)

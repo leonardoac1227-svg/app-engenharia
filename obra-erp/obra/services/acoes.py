@@ -24,7 +24,7 @@ from typing import Callable
 from .. import config
 from ..db import todos, um
 from ..utils import data_br, data_iso, moeda, numero, texto
-from .padroes import completar
+from .padroes import completar, fornecedor_padrao
 
 FREQ_PARCELA = ("semanal", "quinzenal", "mensal")
 FREQ_LOCACAO = ("diaria", "semanal", "quinzenal", "mensal")
@@ -414,7 +414,8 @@ def _e_despesa(ex, d, arq):
     if d.get("confirmar_duplicidade"):
         dados["confirmar_duplicidade"] = "1"
     dados["anexos"] = ex.arquivos(d.get("anexos"), arq)
-    ex.req("POST", f"/api/dias/{ex.dia(d['data'])}/despesas", dados=dados)
+    criada = ex.req("POST", f"/api/dias/{ex.dia(d['data'])}/despesas", dados=dados)
+    ex.criadas.append(criada.get("id"))
 
 
 def _d_despesa(d):
@@ -453,6 +454,8 @@ def _n_editar_despesa(d, ctx):
     for campo, limite in (("descricao", 200), ("fornecedor", 120), ("numero_nota", 40),
                           ("reembolsar_para", 80)):
         novo = texto(origem.get(campo), limite)
+        if campo == "fornecedor":
+            novo = fornecedor_padrao(novo)
         if novo and novo != atual.get(campo):
             alteracoes[campo] = novo
     if texto(origem.get("categoria"), 40) and categoria(origem.get("categoria")) != atual["categoria"]:
@@ -469,20 +472,28 @@ def _n_editar_despesa(d, ctx):
     mover = data_ou(origem.get("mover_para_data") or d.get("mover_para_data")
                     or origem.get("data_lancamento"), "")
     anexos = indices(d.get("anexos") or origem.get("anexos"), ctx.arquivos)
-    if not alteracoes and not anexos and not mover:
+    destino = inteiro(origem.get("mover_para_obra") or d.get("mover_para_obra"))
+    obra_destino = um("SELECT id, nome FROM obras WHERE id = ?", (destino,)) if destino != ctx.obra_id else None
+    if not alteracoes and not anexos and not mover and not obra_destino:
         raise Pular("")
     return {"despesa_id": atual["id"], "despesa_atual": atual, "alteracoes": alteracoes,
-            "mover_para_data": mover if mover and mover != atual["data"] else "", "anexos": anexos}
+            "mover_para_data": mover if mover and mover != atual["data"] else "", "anexos": anexos,
+            "mover_para_obra": obra_destino["id"] if obra_destino else 0,
+            "obra_destino": obra_destino["nome"] if obra_destino else ""}
 
 
 def _e_editar_despesa(ex, d, arq):
     alteracoes = dict(d.get("alteracoes") or {})
-    if d.get("mover_para_data"):
+    if d.get("mover_para_data") and not d.get("mover_para_obra"):
         alteracoes["dia_id"] = ex.dia(d["mover_para_data"])
     if alteracoes:
         if d.get("confirmar_duplicidade"):
             alteracoes["confirmar_duplicidade"] = True
         ex.req("PUT", f"/api/despesas/{d['despesa_id']}", json=alteracoes)
+    if d.get("mover_para_obra"):
+        data = d.get("mover_para_data") or d["despesa_atual"]["data"]
+        dia = ex.req("POST", f"/api/obras/{d['mover_para_obra']}/dia-por-data", json={"data": data})["dia_id"]
+        ex.req("POST", f"/api/despesas/{d['despesa_id']}/mover-obra", json={"dia_id": dia})
     anexos = ex.arquivos(d.get("anexos"), arq)
     if anexos:
         ex.req("POST", f"/api/despesas/{d['despesa_id']}/anexos", dados={"anexos": anexos})
@@ -493,6 +504,8 @@ def _d_editar_despesa(d):
     mudou = [f"{k.replace('_', ' ')} → {moeda(v) if k == 'valor' else v}" for k, v in d["alteracoes"].items()]
     if d.get("mover_para_data"):
         mudou.append(f"movido para {data_br(d['mover_para_data'])}")
+    if d.get("obra_destino"):
+        mudou.append(f"movido para a obra {d['obra_destino']}")
     if d.get("anexos"):
         mudou.append("comprovante anexado")
     return f"Corrigido \"{atual['descricao']}\": " + ", ".join(mudou)
@@ -501,10 +514,12 @@ def _d_editar_despesa(d):
 _registrar(TipoAcao(
     "editar_despesa", "Corrigir lançamento",
     "despesa_id, alteracoes: {descricao, fornecedor, valor, categoria, status_pagamento, reembolsar_para, "
-    "numero_nota, vencimento, mover_para_data} — só o que muda; anexos (comprovante a acrescentar)",
+    "numero_nota, vencimento, mover_para_data, mover_para_obra (id da obra certa)} — só o que muda; "
+    "anexos (comprovante a acrescentar)",
     _n_editar_despesa, _e_editar_despesa, _d_editar_despesa, permissao="financeiro",
-    quando="correção de algo já lançado, mudar status (em aberto/pago/reembolso), mudar de dia, "
-           "anexar comprovante a um lançamento existente, mesma nota já lançada"))
+    quando="correção de algo já lançado: mudar valor, fornecedor, descrição, categoria, número, status "
+           "(em aberto/pago/reembolso), dia ou obra; anexar comprovante a um lançamento existente; "
+           "mesma nota já lançada"))
 
 
 def _n_pagar(d, ctx):
@@ -711,7 +726,7 @@ _ALTERACOES = {k: _S for k in ("descricao", "fornecedor", "categoria", "status_p
                                "numero_nota", "vencimento", "mover_para_data", "nome", "funcao", "telefone",
                                "documento", "chave_pix", "cliente", "endereco", "data_inicio", "previsao_fim",
                                "status")}
-_ALTERACOES.update(valor=_N, orcamento_total=_N, ativo=_B)
+_ALTERACOES.update(valor=_N, orcamento_total=_N, ativo=_B, mover_para_obra=_I)
 ESQUEMA_DADOS = {
     "type": "object",
     "properties": {
@@ -721,7 +736,7 @@ ESQUEMA_DADOS = {
                            "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
                            "pago_em", "meta", "formato", "mover_para_data")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
-                           "parcela_id", "locacao_id", "ciclos")},
+                           "parcela_id", "locacao_id", "ciclos", "mover_para_obra")},
         "valor": _N, "orcamento_previsto": _N, "horas": _N,
         "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},

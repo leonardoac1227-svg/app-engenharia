@@ -36,7 +36,7 @@ from .. import config
 log = logging.getLogger(__name__)
 
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
-TEMPO_MAXIMO_TENTATIVA = 70   # segundos por modelo
+TEMPO_MAXIMO_TENTATIVA = 45   # segundos por modelo
 PRAZO_PADRAO = 100            # segundos por pedido (a tela: o gunicorn corta em 120)
 ERROS_DE_REDE = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
 # Falhas em que vale tentar o outro modelo: o problema é daquele modelo, não da chave.
@@ -45,6 +45,7 @@ CODIGOS_TROCA_MODELO = {404, 408, 429, 500, 502, 503, 504}
 # segundos: desistir na primeira perdia o lote inteiro de fotos.
 ESPERAS_INSTAVEL = (2, 5)     # segundos antes de repetir o mesmo modelo
 PRAZO_MINIMO_REPETIR = 15     # segundos que precisam sobrar para valer repetir
+ESPERA_NOVA_RODADA = 10       # segundos antes de voltar ao modelo principal
 
 # Formatos que cada provedor lê. O que ficar fora é ignorado, não quebra o pedido.
 MIME_AUDIO = {"audio/ogg", "audio/mpeg", "audio/mp3", "audio/wav", "audio/x-wav", "audio/aac",
@@ -232,24 +233,32 @@ def _chamar_gemini(sistema: str, texto: str, arquivos: list[dict], esquema: dict
 
     modelos = modelos_gemini()
     falhas = []
-    for i, modelo in enumerate(modelos):
-        restante = _restante()
-        if restante < 8:
-            break
-        # O principal fica com parte do prazo; o resto é do reserva.
-        tempo = min(TEMPO_MAXIMO_TENTATIVA, restante * (0.6 if i + 1 < len(modelos) else 1.0))
-        inicio = time.monotonic()
-        try:
-            texto_resposta = _gemini_modelo(modelo, sistema, partes, esquema, max_tokens, tempo)
-            _local.modelo = modelo
-            log.info("Gemini %s respondeu em %.1fs", modelo, time.monotonic() - inicio)
-            return texto_resposta
-        except FalhaProvedor as erro:
-            log.warning("Gemini %s falhou em %.1fs: %s", modelo, time.monotonic() - inicio, erro)
-            falhas.append(f"{modelo}: {erro}")
-            if not (erro.rede or erro.codigo in CODIGOS_TROCA_MODELO or not erro.codigo):
-                raise
-    raise FalhaProvedor("; ".join(falhas) or "prazo esgotado", rede=True)
+    # Em pico de demanda os dois modelos recusam juntos e voltam em poucos
+    # segundos: com prazo sobrando (no bot, sobra), uma nova rodada evita
+    # devolver o trabalho ao usuário.
+    for rodada in (1, 2):
+        if rodada == 2:
+            if _restante() < ESPERA_NOVA_RODADA + PRAZO_MINIMO_REPETIR:
+                break
+            time.sleep(ESPERA_NOVA_RODADA)
+        for i, modelo in enumerate(modelos):
+            restante = _restante()
+            if restante < 8:
+                break
+            # O principal fica com parte do prazo; o resto é do reserva.
+            tempo = min(TEMPO_MAXIMO_TENTATIVA, restante * (0.6 if i + 1 < len(modelos) else 1.0))
+            inicio = time.monotonic()
+            try:
+                texto_resposta = _gemini_modelo(modelo, sistema, partes, esquema, max_tokens, tempo)
+                _local.modelo = modelo
+                log.info("Gemini %s respondeu em %.1fs", modelo, time.monotonic() - inicio)
+                return texto_resposta
+            except FalhaProvedor as erro:
+                log.warning("Gemini %s falhou em %.1fs: %s", modelo, time.monotonic() - inicio, erro)
+                falhas.append(f"{modelo}: {erro}")
+                if not (erro.rede or erro.codigo in CODIGOS_TROCA_MODELO or not erro.codigo):
+                    raise
+    raise FalhaProvedor("; ".join(dict.fromkeys(falhas)) or "prazo esgotado", rede=True)
 
 
 # ---------------------------------------------------------------- Claude

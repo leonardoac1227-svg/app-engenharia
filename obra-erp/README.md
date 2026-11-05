@@ -516,6 +516,12 @@ ficam em `services/padroes.py`:
 | "cimento vindo do O13" | sem fornecedor | R$ 1 | Em Aberto |
 | escoras (contrato + boleto) | o do contrato | o do boleto | conforme o boleto |
 
+**Data e correção.** Sem data dita, o lançamento entra hoje, mesmo que o
+documento seja de outro dia; se entrar em outra semana, o bot avisa. Cada
+lançamento volta com um `#id`, e dá para corrigir falando: "o valor da última
+nota é 150", "muda o fornecedor do #212", "esse lançamento é do O13". Parcela,
+aluguel e medição não mudam de obra: é preciso excluir e lançar de novo.
+
 Valor falado ou lido de uma nota vale mais que o padrão. O servidor completa o
 que a IA deixar vazio, e o que mais se repetiu nos últimos 120 dias vai no
 contexto para a IA seguir a mesma escrita, sem precisar virar regra.

@@ -34,10 +34,10 @@ import secrets
 import threading
 import time
 import uuid
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from ..db import executar, todos, um
-from ..utils import ApiErro, agora_iso, hoje_iso, moeda, numero
+from ..utils import ApiErro, agora_iso, data_br, hoje_iso, moeda, numero, segunda_da_semana
 from . import acoes as catalogo
 from . import assistente, ia_provedores, telegram_api
 from .executor_acoes import ErroAcao, Executor, ordenar
@@ -68,6 +68,7 @@ AJUDA = """Sou o assistente da obra e faço tudo que o app faz. Fale do jeito qu
 🗣 Fim do dia: "Ademir fez 27 metros de reboco de manhã e à tarde arestamento; o Carlos faltou, atestado" — monto o diário e o ponto.
 🕗 Ponto: "Ademir trabalhou o dia inteiro hoje", "Ademir e Ailton vieram", "a equipe inteira esteve na obra".
 💰 "Essa nota está em aberto", "passa para reembolso", "paguei o boleto da areia", "frete de 3 viagens"...
+✏️ Corrigir: "o valor da última nota é 150", "muda o fornecedor do #212", "esse lançamento é do O13".
 👷 "Cadastra o Marcos, armador", "o João saiu da obra".
 📊 "Me manda o relatório da semana", "quanto gastei essa semana?"
 
@@ -538,8 +539,9 @@ def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict]
                               "Responda só com o valor (ex.: 350,00).")
             continue
         try:
-            _executar(app, chat_id, v, acao, arquivos, alvo)
-            linhas.append("✅ " + acao["descricao"])
+            criadas = _executar(app, chat_id, v, acao, arquivos, alvo)
+            linhas.append("✅ " + acao["descricao"] + "".join(f" · #{i}" for i in criadas)
+                          + _aviso_de_semana(acao))
         except ErroAcao as erro:
             if erro.codigo == "nota_duplicada":
                 copia, refs = _arquivos_para_pendente(acao, arquivos)
@@ -569,12 +571,22 @@ def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict]
     telegram_api.enviar(chat_id, "\n\n".join(partes), botoes or None)
 
 
-def _executar(app, chat_id: str, v: dict, acao: dict, arquivos: list[dict], obra_id: int) -> None:
+def _aviso_de_semana(acao: dict) -> str:
+    """Quem confere o lançamento olha a semana atual: avisa quando ele entrou em outra."""
+    data = acao["dados"].get("data") if acao["tipo"] == "despesa" else ""
+    if not data:
+        return ""
+    segunda = segunda_da_semana(date.fromisoformat(data))
+    return "" if segunda == segunda_da_semana() else f"\n⚠️ Entrou na semana de {data_br(segunda)}, não na atual."
+
+
+def _executar(app, chat_id: str, v: dict, acao: dict, arquivos: list[dict], obra_id: int) -> list[int]:
     executor = Executor(app, v["usuario_id"], obra_id)
     extra = executor.gravar(acao, arquivos)
     if extra.get("link"):
         dados, nome, mime = executor.baixar(extra["link"])
         telegram_api.enviar_arquivo(chat_id, dados, nome, mime, acao["descricao"])
+    return executor.criadas
 
 
 def _resolver_pendente(app, chat_id: str, v: dict, pendente: dict) -> None:

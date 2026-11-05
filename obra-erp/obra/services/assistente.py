@@ -22,7 +22,6 @@ from __future__ import annotations
 import json
 import re
 import time
-from datetime import date, timedelta
 
 from .. import config
 from ..db import todos, um
@@ -32,6 +31,8 @@ from . import ia_provedores, padroes
 
 MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
+_FALA_DE_DATA = re.compile(r"\b(hoje|ontem|anteontem|segunda|terca|quarta|quinta|sexta|sabado|domingo"
+                           r"|semana passada|mes passado|dia \d{1,2}|\d{1,2}[/.-]\d{1,2})\b")
 
 ESQUEMA = {
     "type": "object",
@@ -88,12 +89,25 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
   (ex.: "ORC 31797"). PIX: o ID da transação (E2E) e o recebedor como fornecedor.
 - Status pela forma de pagamento impressa: dinheiro, PIX, débito, crédito à vista = "Pago" (salvo
   se o usuário disser que pagou do bolso = "Reembolso"); boleto, a prazo, faturado = "Em Aberto".
-- Data: a que o usuário disser; senão a de emissão do documento.
+- Data do lançamento: a que o usuário disser; sem data dita, data_referencia (hoje), mesmo que o documento
+  seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
+- Número do documento sempre em numero_nota, nunca na descrição. Recibo: "REC 1191".
 - Descrição: itens com quantidade e unidade + o que o usuário disse (finalidade).
 - Todo arquivo que não for foto da obra (nota, cupom, orçamento, boleto, comprovante) vai em "anexos" da
   despesa a que se refere — o usuário quer o arquivo salvo junto com o lançamento.
 - Mesma nota (número e fornecedor) já nos lançamentos do contexto, ou PIX de uma conta em aberto
   igual: NÃO crie outra — use editar_despesa (anexando o comprovante) ou pagar_despesa.
+
+CORRIGIR O QUE JÁ FOI LANÇADO
+- "Corrige", "muda", "troca", "na verdade", "está errado", "esse lançamento", "a última nota", "a nota do
+  Inova", "passa para reembolso", "é da outra obra": use editar_despesa com o despesa_id. NUNCA crie uma
+  despesa nova para corrigir outra.
+- "lancamentos_recentes" vem do mais novo para o mais antigo, com os lançamentos da semana passada também:
+  "o último" é o primeiro da lista. A conversa anterior mostra "#id" do que foi gravado: "o #212" é esse id.
+- Lançado na obra errada: alteracoes.mover_para_obra com o id da obra certa. Dia errado: mover_para_data.
+- Mais de um lançamento pode ser o citado e nada os diferencia: não altere; pergunte qual em "resposta",
+  listando-os com o #id.
+- Só use excluir_despesa quando o usuário pedir para apagar ou excluir.
 
 PADRÕES DA EMPRESA (fala curta já é o lançamento completo: preencha "dados" por estas regras)
 {padroes}
@@ -191,13 +205,12 @@ def _contexto_obra(obra: dict, referencia: str, pode_financeiro: bool) -> dict:
         semana["horas_lancadas"] = round(float(horas or 0), 1)
 
     if pode_financeiro:
-        inicio = (date.fromisoformat(referencia) - timedelta(days=21)).isoformat()
+        # Ordem de gravação, não de data: "o último lançamento" é o último que entrou.
         ctx["lancamentos_recentes"] = [dict(r) for r in todos(
             """SELECT x.id, d.data, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
                       x.numero_nota, x.vencimento
                  FROM despesas x JOIN dias d ON d.id = x.dia_id JOIN semanas s ON s.id = d.semana_id
-                WHERE s.obra_id = ? AND d.data >= ? ORDER BY d.data DESC, x.id DESC LIMIT 30""",
-            (obra_id, inicio))]
+                WHERE s.obra_id = ? ORDER BY x.id DESC LIMIT 30""", (obra_id,))]
         ctx["contas_em_aberto"] = [dict(r) for r in todos(
             """SELECT x.id, d.data, x.descricao, x.fornecedor, x.valor, x.numero_nota, x.vencimento
                  FROM despesas x JOIN dias d ON d.id = x.dia_id JOIN semanas s ON s.id = d.semana_id
@@ -276,6 +289,35 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
     return transcricao
 
 
+def _data_foi_dita(mensagem: str) -> bool:
+    return bool(_FALA_DE_DATA.search(catalogo.sem_acento(mensagem)))
+
+
+def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> None:
+    """Sem data dita, a despesa entra hoje, ainda que o modelo copie a data do documento.
+
+    Com a data do recibo ela caía na semana anterior, fora da tela que o gestor
+    estava olhando, e parecia que o bot não tinha lançado nada.
+    """
+    if _data_foi_dita(mensagem):
+        return
+    for acao in acoes:
+        if acao.get("tipo") == "despesa":
+            if not isinstance(acao.get("dados"), dict):
+                acao["dados"] = {}
+            acao["dados"]["data"] = referencia
+
+
+def _obra_do_lancamento(acao: dict, ids: set[int]) -> int:
+    """Correção vale na obra do lançamento citado, seja qual for a obra da conversa."""
+    if acao.get("tipo") not in ("editar_despesa", "pagar_despesa", "excluir_despesa"):
+        return 0
+    despesa_id = catalogo.inteiro((acao.get("dados") or {}).get("despesa_id"))
+    linha = um("""SELECT s.obra_id FROM despesas x JOIN dias d ON d.id = x.dia_id
+                    JOIN semanas s ON s.id = d.semana_id WHERE x.id = ?""", (despesa_id,))
+    return linha["obra_id"] if linha and linha["obra_id"] in ids else 0
+
+
 def _obra_da_equipe(acoes: list[dict], obras: list[dict], referencia: str) -> int:
     """Sem obra dita: a única obra em que todos os nomes do ponto trabalham."""
     nomes = {texto(r.get("nome"), 120) for a in acoes if a.get("tipo") == "ponto"
@@ -331,6 +373,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
         max_tokens=8192, pensar="baixo", prazo=prazo - (time.monotonic() - inicio))
     bruto = bruto if isinstance(bruto, dict) else {}
     acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
+    _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:
@@ -339,7 +382,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
 
     por_obra: dict[int, list] = {}
     for acao in acoes_brutas:
-        alvo = catalogo.inteiro(acao.get("obra_id"))
+        alvo = _obra_do_lancamento(acao, ids) or catalogo.inteiro(acao.get("obra_id"))
         por_obra.setdefault(alvo if alvo in ids else obra_id, []).append(acao)
 
     resultado = {"transcricao": transcricao, "obra_id": obra_id,
