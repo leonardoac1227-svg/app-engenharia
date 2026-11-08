@@ -7,6 +7,8 @@ ponto, mas não vê nem movimenta dinheiro.
 
 from __future__ import annotations
 
+from datetime import date
+
 from flask import Blueprint, jsonify, request
 
 from ..config import CATEGORIAS_PADRAO, REEMBOLSO_PADRAO, STATUS_PAGAMENTO
@@ -17,7 +19,8 @@ from ..services import anexos_despesa
 from ..services.locacoes import criar_locacao
 from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
 from ..services.fretes import validar as validar_frete
-from ..services.parcelamento import gerar_parcelas, listar_grupo, remover_grupo, sql_fora_da_semana
+from ..services.parcelamento import (alocar_parcelas_agendadas, dia_de_pagar, gerar_parcelas, listar_grupo,
+                                     remover_grupo, sql_fora_da_semana)
 from ..services.parcelamento import validar as validar_parcelamento
 from ..utils import (ApiErro, agora_iso, data_br, data_iso, formatar_bytes, hoje_iso, moeda,
                      numero, somar_dias, texto)
@@ -225,7 +228,11 @@ def atualizar(despesa_id: int):
     if "valor" in dados:
         campos.append("valor = ?"); valores.append(numero(dados["valor"], 0, 0.01, campo="o valor"))
     if "vencimento" in dados:
-        campos.append("vencimento = ?"); valores.append(data_iso(dados["vencimento"], None, "vencimento"))
+        novo_vencimento = data_iso(dados["vencimento"], None, "vencimento")
+        campos.append("vencimento = ?"); valores.append(novo_vencimento)
+        # Parcela anda junto com o vencimento; despesa comum não tem dia de pagamento.
+        campos.append("pagar_em = CASE WHEN grupo_parcela <> '' THEN ? ELSE pagar_em END")
+        valores.append(dia_de_pagar(date.fromisoformat(novo_vencimento)).isoformat() if novo_vencimento else None)
     if "status_pagamento" in dados:
         status = texto(dados["status_pagamento"], 20)
         if status not in STATUS_PAGAMENTO:
@@ -255,6 +262,8 @@ def atualizar(despesa_id: int):
         raise ApiErro("Nada para atualizar.")
     valores.append(despesa_id)
     executar(f"UPDATE despesas SET {', '.join(campos)} WHERE id = ?", valores)
+    if "vencimento" in dados:
+        alocar_parcelas_agendadas(obra_id)
     registrar_auditoria(usuario, "editou_despesa", "despesa", despesa_id)
     return jsonify({"ok": True})
 

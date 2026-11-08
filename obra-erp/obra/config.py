@@ -29,6 +29,7 @@ PUBLIC_URL      Endereço público do app (no Render vem sozinho em RENDER_EXTER
 FUSO_HORARIO    Fuso do canteiro (padrão America/Sao_Paulo). Define o que é "hoje".
 MAX_UPLOAD_MB   Tamanho máximo de cada envio (padrão 25 MB).
 REEMBOLSO_PADRAO  Quem recebe o reembolso quando ninguém é informado (padrão: Léo).
+DIA_PAGAMENTO   Dia da semana em que as contas são pagas, 0 = segunda (padrão: 4, sexta).
 JORNADA_HORAS   Horas de um dia completo de trabalho (padrão 8). Abaixo disso, de
                 segunda a sexta, o ponto pede justificativa e o relatório avisa.
 """
@@ -80,6 +81,11 @@ PAPEIS = {
 CATEGORIAS_PADRAO = ["Material", "Serviço", "Locação", "Frete", "Alimentação", "Outro"]
 STATUS_PAGAMENTO = ["Reembolso", "Em Aberto", "Pago"]
 REEMBOLSO_PADRAO = os.environ.get("REEMBOLSO_PADRAO", "Léo").strip() or "Léo"
+# Dia da semana em que a empresa paga as contas (0 = segunda ... 4 = sexta).
+try:
+    DIA_PAGAMENTO = min(max(int(os.environ.get("DIA_PAGAMENTO", "4")), 0), 6)
+except ValueError:
+    DIA_PAGAMENTO = 4
 try:
     JORNADA_HORAS = float(os.environ.get("JORNADA_HORAS", "8").replace(",", ".")) or 8.0
 except ValueError:

@@ -26,6 +26,7 @@ from .. import config
 from ..db import todos, um
 from ..utils import data_br, data_iso, moeda, numero, texto
 from .padroes import completar, fornecedor_padrao
+from .parcelamento import dia_de_pagar
 
 FREQ_PARCELA = ("semanal", "quinzenal", "mensal")
 FREQ_LOCACAO = ("diaria", "semanal", "quinzenal", "mensal")
@@ -444,7 +445,8 @@ def _d_despesa(d):
     partes.append(d.get("status_pagamento", ""))
     if d.get("parcelas_lista"):
         partes.append(f"{len(d['parcelas_lista'])} vencimento(s): " + ", ".join(
-            f"{data_br(p['vencimento'])} {moeda(p['valor'])}" for p in d["parcelas_lista"]))
+            f"{data_br(p['vencimento'])} {moeda(p['valor'])} (paga {data_br(dia_de_pagar(date.fromisoformat(p['vencimento'])).isoformat())})"
+            for p in d["parcelas_lista"]))
     if d.get("parcelas"):
         partes.append(f"{d['parcelas']}x {d['parcela_frequencia']}")
     if d.get("frete_viagens"):

@@ -277,6 +277,7 @@ with app.app_context():
 print('== NOTA A PRAZO: CADA VENCIMENTO NA SUA SEMANA ==')
 from datetime import date, timedelta
 from obra.services.semanas import garantir_semanas_em_dia
+from obra.services.parcelamento import dia_de_pagar
 HOJE = date.fromisoformat(hoje_iso())
 V1, V2 = (HOJE + timedelta(days=15)).isoformat(), (HOJE + timedelta(days=45)).isoformat()
 
@@ -308,7 +309,8 @@ ok('2 vencimento(s)' in enviadas[-1]['text'], 'o bot mostra os vencimentos', env
 with app.test_request_context():
     garantir_semanas_em_dia(HOJE + timedelta(days=16))
 g = grupo_de(ID)
-ok(g[0]['data'] == V1 and g[1]['data'] != V2, 'semana do 1º vencimento criada: a parcela vai para lá', g)
+ok(g[0]['data'] == dia_de_pagar(date.fromisoformat(V1)).isoformat() and g[1]['data'] != V2,
+   'semana do pagamento criada: a parcela vai para a sexta antes do vencimento', g)
 
 fila_ia[:] = [MARCON([{'vencimento': V1, 'valor': 289}])]
 entregar({'text': 'nota a prazo da Marcon, conexões, I19'})
@@ -332,6 +334,40 @@ antes = len(despesas(I19))
 r = c.post(f'/api/dias/{dia_hoje}/despesas', data={'categoria': 'Material', 'descricao': 'X', 'valor': '10',
            'parcelas_lista': '[{"vencimento": "2026-13-40", "valor": 10}]'}, headers=H, content_type='multipart/form-data')
 ok(r.status_code == 400 and len(despesas(I19)) == antes, 'parcela inválida não deixa a nota gravada pela metade', r.get_json())
+
+print('== PAGAMENTO NA SEXTA ANTES DO VENCIMENTO ==')
+from obra.services.parcelamento import dia_de_pagar
+for venc, sexta in [('2026-11-11', '2026-11-06'), ('2026-11-18', '2026-11-13'), ('2026-11-13', '2026-11-13'),
+                    ('2026-11-15', '2026-11-13'), ('2026-11-16', '2026-11-13'), ('2026-11-14', '2026-11-13')]:
+    ok(dia_de_pagar(date.fromisoformat(venc)).isoformat() == sexta, f'vence {venc} → paga {sexta}')
+
+PROXIMA_SEG = HOJE + timedelta(days=7 - HOJE.weekday())
+QUARTA_SEGUINTE = PROXIMA_SEG + timedelta(days=9)          # quarta da semana depois da próxima
+SEXTA_ANTES = QUARTA_SEGUINTE - timedelta(days=5)          # sexta da próxima semana
+fila_ia[:] = [MARCON([{'vencimento': QUARTA_SEGUINTE.isoformat(), 'valor': 289}])]
+fila_ia[0]['acoes'][0]['dados']['numero_nota'] = '343300'
+entregar({'text': 'nota da Marcon a prazo, I19'})
+ID = ultimo_id()
+ok(f'(paga {SEXTA_ANTES.strftime("%d/%m/%Y")})' in enviadas[-1]['text'], 'o bot diz em que sexta a conta é paga',
+   enviadas[-1]['text'])
+with app.test_request_context():
+    garantir_semanas_em_dia(SEXTA_ANTES)
+g = grupo_de(ID)
+ok(g[0]['data'] == SEXTA_ANTES.isoformat() and g[0]['vencimento'] == QUARTA_SEGUINTE.isoformat(),
+   'vence na quarta: entra na semana anterior, na sexta, e o vencimento fica o impresso', g)
+
+QUARTA = (HOJE - timedelta(days=HOJE.weekday()) + timedelta(days=2))
+dia_ultimo = next(x for x in c.get(f'/api/obras/{I19}/contexto').get_json()['dias'])['id']
+r = c.post(f'/api/dias/{dia_hoje}/despesas', data={'categoria': 'Material', 'descricao': 'Tinta', 'valor': '300',
+           'status_pagamento': 'Em Aberto', 'vencimento': hoje_iso(), 'parcelas': '2',
+           'parcela_frequencia': 'semanal'}, headers=H, content_type='multipart/form-data').get_json()
+segunda_parcela = r['parcelamento']['lancamentos'][1]
+ok(segunda_parcela['pagar_em'] == dia_de_pagar(date.fromisoformat(segunda_parcela['vencimento'])).isoformat(),
+   'parcelamento pelo formulário também paga na sexta', segunda_parcela)
+c.put(f"/api/despesas/{segunda_parcela['id']}", json={'vencimento': QUARTA_SEGUINTE.isoformat()}, headers=H)
+with app.app_context():
+    x = um('SELECT pagar_em FROM despesas WHERE id = ?', (segunda_parcela['id'],))
+ok(x['pagar_em'] == SEXTA_ANTES.isoformat(), 'mudar o vencimento move junto o dia de pagamento', dict(x))
 
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

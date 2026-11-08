@@ -18,7 +18,10 @@ na lista e apagar o parcelamento inteiro de uma vez.
 
 Cada parcela pertence à semana do seu vencimento. A primeira é a própria nota e
 fica no dia do lançamento, exceto quando os vencimentos vieram impressos na
-nota (`vence_na_semana`): aí ela também vai para a semana dela. Quando essa semana ainda não foi
+nota (`vence_na_semana`): aí ela também vai para a semana dela. As contas são
+pagas num dia fixo (sexta, `config.DIA_PAGAMENTO`), então a parcela entra na
+semana do último dia de pagamento antes do vencimento (`pagar_em`): vence na
+quarta 11/11, é paga na sexta 06/11 e entra na planilha daquela semana. Quando essa semana ainda não foi
 criada, a parcela fica "agendada": guardada no dia do lançamento, mas fora
 das contas e relatórios daquela semana (ver `sql_fora_da_semana`). Ela
 continua visível em Contas a pagar, que olha o vencimento, e é movida para o
@@ -36,6 +39,7 @@ import json
 import uuid
 from datetime import date, timedelta
 
+from .. import config
 from ..db import executar, todos, um
 from .anexos_despesa import registrar as registrar_anexo
 from ..utils import ApiErro, agora_iso, data_iso, numero, texto
@@ -93,10 +97,34 @@ def sql_fora_da_semana(despesa: str = "x", dia: str = "d") -> str:
         f"(COALESCE({despesa}.grupo_tipo, 'parcela') = 'parcela'"
         f" AND (COALESCE({despesa}.parcela_numero, 0) > 1"
         f" OR (COALESCE({despesa}.parcela_numero, 0) = 1 AND COALESCE({despesa}.vence_na_semana, 0) = 1))"
-        f" AND COALESCE({despesa}.vencimento, '') > COALESCE("
+        f" AND COALESCE({despesa}.pagar_em, {despesa}.vencimento, '') > COALESCE("
         f"(SELECT MAX(dfim.data) FROM dias dfim WHERE dfim.semana_id = {dia}.semana_id),"
         f" '9999-12-31'))"
     )
+
+
+def dia_de_pagar(vencimento: date) -> date:
+    """Último dia de pagamento (sexta) até o vencimento, inclusive.
+
+    Quarta 11/11 → sexta 06/11; sexta 13/11 → a própria 13/11; sábado e
+    domingo → a sexta antes deles.
+    """
+    return vencimento - timedelta(days=(vencimento.weekday() - config.DIA_PAGAMENTO) % 7)
+
+
+def preencher_dia_de_pagar(hoje: str) -> int:
+    """Parcelas de antes desta regra: as que ainda vão vencer passam a ser pagas na sexta.
+
+    As já vencidas ficam onde estão, para não reescrever semanas que já foram
+    pagas e entregues. Devolve quantas foram preenchidas.
+    """
+    pendentes = todos("""SELECT id, vencimento FROM despesas
+                          WHERE grupo_tipo = 'parcela' AND parcela_numero > 0 AND pagar_em IS NULL
+                            AND status_pagamento = 'Em Aberto' AND vencimento >= ?""", (hoje,))
+    for linha in pendentes:
+        executar("UPDATE despesas SET pagar_em = ? WHERE id = ?",
+                 (dia_de_pagar(date.fromisoformat(str(linha["vencimento"])[:10])).isoformat(), linha["id"]))
+    return len(pendentes)
 
 
 def _dia_do_vencimento(obra_id: int, data_alvo: str) -> int | None:
@@ -121,7 +149,8 @@ def alocar_parcelas_agendadas(obra_id: int | None = None) -> int:
              JOIN dias d ON d.id = x.dia_id
              JOIN semanas s ON s.id = d.semana_id
              JOIN semanas s2 ON s2.obra_id = s.obra_id
-             JOIN dias alvo ON alvo.semana_id = s2.id AND alvo.data = x.vencimento
+             JOIN dias alvo ON alvo.semana_id = s2.id
+                            AND alvo.data = COALESCE(x.pagar_em, x.vencimento)
             WHERE {filtro_obra} AND x.grupo_tipo = 'parcela'
               AND (x.parcela_numero > 1 OR (x.parcela_numero = 1 AND x.vence_na_semana = 1))
               AND alvo.id <> x.dia_id""".format(filtro_obra=filtro_obra),
@@ -220,36 +249,37 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple,
     executar(
         """UPDATE despesas SET valor = ?, descricao = ?, vencimento = ?,
                                grupo_parcela = ?, parcela_numero = 1, parcela_total = ?,
-                               vence_na_semana = ?
+                               vence_na_semana = ?, pagar_em = ?
             WHERE id = ?""",
         (valores[0], rotulo(1), inicio.isoformat(),
-         grupo, parcelas, 1 if lista else 0, despesa_id))
+         grupo, parcelas, 1 if lista else 0, dia_de_pagar(inicio).isoformat(), despesa_id))
 
     criadas = [{"id": despesa_id, "numero": 1, "valor": valores[0],
-                "vencimento": inicio.isoformat()}]
+                "vencimento": inicio.isoformat(), "pagar_em": dia_de_pagar(inicio).isoformat()}]
 
     for indice in range(1, parcelas):
         vencimento = vencimentos[indice]
-        # Sem a semana do vencimento, a parcela fica agendada no dia do lançamento.
-        dia_id = _dia_do_vencimento(obra_id, vencimento.isoformat()) or despesa["dia_id"]
+        pagar = dia_de_pagar(vencimento).isoformat()
+        # Sem a semana do pagamento, a parcela fica agendada no dia do lançamento.
+        dia_id = _dia_do_vencimento(obra_id, pagar) or despesa["dia_id"]
 
         cur = executar(
             """INSERT INTO despesas (dia_id, etapa_id, categoria, descricao, fornecedor, valor,
                                      status_pagamento, numero_nota, grupo_parcela, parcela_numero,
-                                     parcela_total, vencimento, imagem_path, nome_arquivo,
+                                     parcela_total, vencimento, pagar_em, imagem_path, nome_arquivo,
                                      criado_por, criado_em)
-               VALUES (?, ?, ?, ?, ?, ?, 'Em Aberto', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+               VALUES (?, ?, ?, ?, ?, ?, 'Em Aberto', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (dia_id, despesa["etapa_id"], despesa["categoria"],
              rotulo(indice + 1), despesa["fornecedor"],
              valores[indice], despesa["numero_nota"], grupo, indice + 1, parcelas,
-             vencimento.isoformat(), despesa["imagem_path"], despesa["nome_arquivo"],
+             vencimento.isoformat(), pagar, despesa["imagem_path"], despesa["nome_arquivo"],
              usuario_id, agora_iso()))
 
         for anexo in anexos:
             registrar_anexo(cur.lastrowid, anexo["arquivo"], anexo["nome_original"], anexo["tamanho"])
 
-        criadas.append({"id": cur.lastrowid, "numero": indice + 1,
-                        "valor": valores[indice], "vencimento": vencimento.isoformat()})
+        criadas.append({"id": cur.lastrowid, "numero": indice + 1, "valor": valores[indice],
+                        "vencimento": vencimento.isoformat(), "pagar_em": pagar})
 
     # Com vencimentos da nota, a 1ª parcela também vai para a semana dela, se já existir.
     alocar_parcelas_agendadas(obra_id)

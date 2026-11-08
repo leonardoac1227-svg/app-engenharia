@@ -343,6 +343,12 @@ vale). Nesse caso a 1ª parcela também vai para a semana do seu vencimento
 (`vence_na_semana`); semana ainda não criada deixa a parcela agendada até ela
 nascer. Sem falar em parcela, a nota entra hoje e guarda só o 1º vencimento.
 
+**Pagamento na sexta.** As contas são pagas na sexta (`DIA_PAGAMENTO`, padrão 4).
+Cada parcela entra na semana da última sexta até o vencimento: vence na quarta
+11/11 → paga na sexta 06/11, na planilha daquela semana; vence na sexta, no
+sábado ou no domingo → a sexta da própria semana. O vencimento impresso não muda;
+o dia de pagamento fica em `pagar_em`.
+
 **Por que aqui as parcelas nascem todas de uma vez, diferente da locação.**
 Aluguel pode ser interrompido (devolveu o andaime, para de pagar), então lá a
 renovação só vira conta quando o gestor confirma. Nota parcelada já é dívida

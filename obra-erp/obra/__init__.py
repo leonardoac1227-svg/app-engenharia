@@ -21,7 +21,7 @@ from .db import fechar_db, migrar
 from .security import validar_csrf
 from .utils import ApiErro
 
-__version__ = "3.15.0"
+__version__ = "3.16.0"
 
 # Rotas que podem ser chamadas sem token CSRF (ainda não existe sessão).
 ROTAS_SEM_CSRF = {"/api/auth/login"}
@@ -71,8 +71,10 @@ def create_app() -> Flask:
     # Parcelas gravadas por versões anteriores numa semana que não é a do
     # vencimento vão para o dia certo. Sem nada fora do lugar, não muda nada.
     try:
-        from .services.parcelamento import alocar_parcelas_agendadas
+        from .services.parcelamento import alocar_parcelas_agendadas, preencher_dia_de_pagar
+        from .utils import hoje_iso
         with app.app_context():
+            preencher_dia_de_pagar(hoje_iso())
             movidas = alocar_parcelas_agendadas()
         if movidas:
             logging.getLogger(__name__).info(

@@ -150,7 +150,8 @@ ok(S5.get('parcelas_previstas') == 1, 'criar a semana avisa a parcela prevista',
 fe5 = c.get(f'/api/semanas/{S5["id"]}/fechamento').get_json()
 ok([x['descricao'] for x in fe5['despesas']] == ['Porcelanato (2/3)'],
    '2ª parcela já aparece na semana do vencimento', [x['descricao'] for x in fe5['despesas']])
-ok(fe5['despesas'][0]['data'] == '2026-09-05', 'no dia exato do vencimento', fe5['despesas'][0]['data'])
+ok(fe5['despesas'][0]['data'] == '2026-09-04', 'vence no sábado 05/09: paga na sexta 04/09',
+   fe5['despesas'][0]['data'])
 ok(fe5['financeiro']['em_aberto'] == 300.0, 'entra no a pagar da semana nova', fe5['financeiro'])
 fe1 = c.get(f'/api/semanas/{S1}/fechamento').get_json()
 ok(len(fe1['despesas']) == 1, 'semana 1 continua só com a 1ª', [x['descricao'] for x in fe1['despesas']])
@@ -160,10 +161,11 @@ ok(r.status_code == 200, 'planilha de pagamento da semana nova gera', r.status_c
 # Uma semana com a data errada, corrigida depois, também recebe a parcela.
 S9 = c.post(f'/api/obras/{O2}/semanas', json={'data_inicio':'2026-10-12'}, headers=H).get_json()
 ok(not S9.get('parcelas_previstas'), 'semana sem vencimento não recebe nada', S9)
-c.put(f'/api/semanas/{S9["id"]}', json={'data_inicio':'2026-10-05'}, headers=H)
+# A 3ª vence na segunda 05/10: é paga na sexta 02/10, na semana de 28/09.
+c.put(f'/api/semanas/{S9["id"]}', json={'data_inicio':'2026-09-28'}, headers=H)
 fe9 = c.get(f'/api/semanas/{S9["id"]}/fechamento').get_json()
 ok([x['descricao'] for x in fe9['despesas']] == ['Porcelanato (3/3)'],
-   'corrigir o início da semana puxa a parcela que vence nela', [x['descricao'] for x in fe9['despesas']])
+   'corrigir o início da semana puxa a parcela paga nela', [x['descricao'] for x in fe9['despesas']])
 
 # Dado de versão anterior: a 2ª parcela gravada na semana 1, embora a semana
 # do vencimento exista. Ao subir o app, ela volta para o lugar certo.

@@ -428,6 +428,7 @@ CREATE TABLE IF NOT EXISTS despesas (
     parcela_numero INTEGER DEFAULT 0,
     parcela_total INTEGER DEFAULT 0,
     vence_na_semana INTEGER DEFAULT 0,
+    pagar_em TEXT,
     vencimento TEXT,
     pago_em TEXT,
     imagem_path TEXT DEFAULT '',
@@ -673,6 +674,7 @@ COLUNAS_EXTRAS = [
     ("despesas", "parcela_numero", "INTEGER DEFAULT 0"),
     ("despesas", "parcela_total", "INTEGER DEFAULT 0"),
     ("despesas", "vence_na_semana", "INTEGER DEFAULT 0"),
+    ("despesas", "pagar_em", "TEXT"),
     ("despesas", "reembolsar_para", "TEXT DEFAULT ''"),
     ("telegram_chats", "ocupado_ate", "TEXT"),
 ]

@@ -82,17 +82,18 @@ d = c.post(f'/api/dias/{dia2}/despesas', data={'categoria':'Material','descricao
            content_type='multipart/form-data').get_json()['id']
 anexo = c.get(f'/api/dias/{dia2}/despesas').get_json()[0]['anexos'][0]['url'].rsplit('/', 1)[1]
 
-# Nota lançada na semana 1, em 3x semanal: a 2ª parcela vence na semana 2 e a 3ª na semana 3.
+# Nota lançada na semana 1, em 3x semanal com vencimento na sexta (dia de pagamento):
+# a 2ª parcela cai na semana 2 e a 3ª na semana 3.
 dia1 = d1[2]['id']
 nota1 = c.post(f'/api/dias/{dia1}/despesas', data={'categoria':'Material','descricao':'Tijolo','valor':'300',
-               'status_pagamento':'Em Aberto','vencimento':'2026-08-12','parcelas':'3',
+               'status_pagamento':'Em Aberto','vencimento':'2026-08-14','parcelas':'3',
                'parcela_frequencia':'semanal'}, headers=H, content_type='multipart/form-data').get_json()['id']
 grupo1 = c.get(f'/api/despesas/{nota1}/parcelas', headers=H).get_json()
 parcela_na_s2 = grupo1[1]['id']
 
 # Nota lançada na semana 2, em 3x semanal: parcelas nas semanas 3 e 4; a da semana 3 já paga.
 nota2 = c.post(f'/api/dias/{dia2}/despesas', data={'categoria':'Material','descricao':'Areia','valor':'600',
-               'status_pagamento':'Em Aberto','vencimento':'2026-08-17','parcelas':'3',
+               'status_pagamento':'Em Aberto','vencimento':'2026-08-21','parcelas':'3',
                'parcela_frequencia':'semanal'}, headers=H, content_type='multipart/form-data').get_json()['id']
 grupo2 = c.get(f'/api/despesas/{nota2}/parcelas', headers=H).get_json()
 c.post(f"/api/despesas/{grupo2[1]['id']}/pagar", json={}, headers=H)

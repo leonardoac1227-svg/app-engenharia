@@ -116,7 +116,8 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - NOTA A PRAZO / PARCELADA (quando o usuário disser "parcelada", "em 3x", "a prazo", "tem boleto",
   "vencimentos", "parcelas"): leia o quadro "PARCELAS", "DUPLICATAS" ou "FATURA" do documento e preencha
   parcelas_lista com cada vencimento e valor exatamente como impressos, na ordem (mesmo que seja uma
-  parcela só). valor = total da nota. Cada parcela entra sozinha na semana do seu vencimento. Sem quadro
+  parcela só). valor = total da nota. Copie o vencimento como impresso: o app põe cada parcela sozinho na
+  semana em que ela é paga (a sexta antes do vencimento). Sem quadro
   impresso, use parcelas + parcela_frequencia ditos pelo usuário. Sem o usuário falar em parcela, não
   preencha parcelas_lista: o primeiro vencimento vai só em "vencimento".
 - Descrição no estilo da empresa: curta, o que foi comprado + para quê. Quantidade quando ajuda; sem marca,
