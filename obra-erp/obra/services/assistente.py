@@ -33,6 +33,15 @@ MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
 _FALA_DE_DATA = re.compile(r"\b(hoje|ontem|anteontem|segunda|terca|quarta|quinta|sexta|sabado|domingo"
                            r"|semana passada|mes passado|dia \d{1,2}|\d{1,2}[/.-]\d{1,2})\b")
+_NOTA_DO_BOT = re.compile(r"\n\((Complete o lançamento|Estes arquivos reenviados).*?\)(?=\n|$)", re.S)
+# Ordem importa só para leitura: com mais de um status na fala, nenhum é aplicado.
+_FALA_DE_STATUS = (
+    ("Reembolso", r"\breembols\w*|\bdo (meu )?bolso\b|\beu (que )?paguei\b|\badiantei\b"),
+    ("Em Aberto", r"\bem aberto\b|\ba pagar\b|\bfaturad\w*|\bnao (foi )?pag[oa]\b|\bfiado\b"),
+    ("Pago", r"(?<!nao )(?<!nao foi )\b(ja )?(pago|paga|quitad[oa])\b"),
+)
+_REEMBOLSO_PARA = re.compile(r"reembols\w*\s+(?:para|pro|pra|do|da|de|ao)\s+(?:o\s+|a\s+)?([A-Za-zÀ-ÿ]{3,})", re.I)
+_NAO_SAO_NOMES = {"mim", "meu", "minha", "obra", "nota", "loja", "fornecedor", "material", "cupom"}
 
 ESQUEMA = {
     "type": "object",
@@ -84,15 +93,29 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - O VALOR vem SEMPRE do documento: o TOTAL final a pagar (depois de descontos), nunca subtotal,
   preço unitário ou valor de um item. Leia com atenção foto torta, amassada ou com dedo na frente.
   Só deixe valor 0 se não houver documento ou o total estiver ilegível — e diga isso na resposta.
-- Fornecedor: nome fantasia se houver, senão razão social. Número: o da NF; se não for nota fiscal
+- Fornecedor: o nome curto pelo qual a loja é conhecida ("Inova civil", "O engenheiro", "Posto Sossego"),
+  com maiúscula só no começo. Sem "LTDA", CNPJ, cidade ou filial. Número: o da NF; se não for nota fiscal
   (orçamento, pedido, "não é documento fiscal", recibo), o número dele com o tipo na frente
   (ex.: "ORC 31797"). PIX: o ID da transação (E2E) e o recebedor como fornecedor.
-- Status pela forma de pagamento impressa: dinheiro, PIX, débito, crédito à vista = "Pago" (salvo
-  se o usuário disser que pagou do bolso = "Reembolso"); boleto, a prazo, faturado = "Em Aberto".
+- STATUS — como esta empresa lança (vem do histórico real, não da forma de pagamento impressa):
+  1. O que o usuário disser vale sempre, em qualquer parte da mensagem, inclusive no fim:
+     "reembolso", "paguei do bolso", "eu paguei" = Reembolso; "em aberto", "a pagar", "faturado" =
+     Em Aberto; "pago", "já paguei a loja", "quitado" = Pago.
+  2. Sem nada dito: nota de fornecedor com conta (Inova civil, Somar, Central da construção, Alta tensão,
+     locadoras, Diego motoboy, SOS Entulho, Hitalo) = Em Aberto; compra de balcão paga na hora (cupom,
+     dinheiro, PIX, cartão) em loja pequena, posto, papelaria = Reembolso.
+  3. "Pago" só quando o usuário disser. Nunca deduza "Pago" pelo cupom.
+- Reembolso: "reembolsar_para" é quem pagou. Sem nome dito, deixe vazio (o app usa o padrão, Léo).
+  "Reembolso do Luiz", "o Luiz pagou" = reembolsar_para "Luiz".
 - Data do lançamento: a que o usuário disser; sem data dita, data_referencia (hoje), mesmo que o documento
   seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
+  Vencimento de boleto ou contrato vai em "vencimento", nunca em "data".
 - Número do documento sempre em numero_nota, nunca na descrição. Recibo: "REC 1191".
-- Descrição: itens com quantidade e unidade + o que o usuário disse (finalidade).
+- Descrição no estilo da empresa: curta, o que foi comprado + para quê. Quantidade quando ajuda; sem marca,
+  código, medida técnica de catálogo ou preço. Muitos itens: os 2 ou 3 principais e "materiais diversos".
+  Bom: "6kg de pregos para execução de vigas e pilares", "Discos de corte para telas da laje",
+  "Espaçadores para assentamento de porcelanato da piscina", "Conta da internet referente ao mês de outubro".
+  Ruim: "5 un de Disco corte aço 115,0X1,6X22,23 DCV Vonder, 1 un de Broca SDS plus 8,0x100x160".
 - Todo arquivo que não for foto da obra (nota, cupom, orçamento, boleto, comprovante) vai em "anexos" da
   despesa a que se refere — o usuário quer o arquivo salvo junto com o lançamento.
 - Mesma nota (número e fornecedor) já nos lançamentos do contexto, ou PIX de uma conta em aberto
@@ -112,7 +135,10 @@ CORRIGIR O QUE JÁ FOI LANÇADO
 PADRÕES DA EMPRESA (fala curta já é o lançamento completo: preencha "dados" por estas regras)
 {padroes}
 - Valor que o usuário disser ou que estiver no documento vale mais que o valor do padrão. Usar o valor
-  do padrão não é inventar. Nestes casos o status do padrão vale mais que a forma de pagamento impressa.
+  do padrão não é inventar. Status dito pelo usuário vale mais que o status do padrão.
+
+EXEMPLOS (fala → ações). Siga o mesmo raciocínio em falas parecidas.
+{exemplos}
 - "padroes_recentes" do contexto mostra o que mais se repete: siga a mesma escrita de descrição,
   fornecedor, categoria e status em lançamentos parecidos, mas só use o valor dali se a fala não trouxer
   valor e ele for sempre o mesmo.
@@ -232,10 +258,20 @@ def _contexto_obra(obra: dict, referencia: str, pode_financeiro: bool) -> dict:
     return ctx
 
 
+def _jeito_de_falar(nome: str) -> str:
+    """Como a obra aparece na fala: "I19" também é "I-19", "i 19" e "obra 19"."""
+    chave = catalogo.sem_acento(nome)
+    sigla = re.fullmatch(r"([a-z]{1,3})\s*-?\s*(\d{1,4})", chave)
+    if not sigla:
+        return rf"(?<!\w){re.escape(chave)}(?!\w)"
+    letras, numero = sigla.groups()
+    return rf"(?<!\w)(?:{letras}\s*-?\s*{numero}|obras?\s+(?:d[oa]\s+)?{numero})(?!\d)"
+
+
 def _obras_citadas(texto_msg: str, obras: list[dict]) -> list[int]:
-    alvo = f" {catalogo.sem_acento(texto_msg)} "
+    alvo = f" {catalogo.sem_acento(fala_do_usuario(texto_msg))} "
     return [o["id"] for o in obras if len(catalogo.sem_acento(o["nome"])) >= 2
-            and re.search(rf"(?<!\w){re.escape(catalogo.sem_acento(o['nome']))}(?!\w)", alvo)]
+            and re.search(_jeito_de_falar(o["nome"]), alvo)]
 
 
 def _equipes(obras: list[dict]) -> dict[int, list[str]]:
@@ -289,23 +325,67 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
     return transcricao
 
 
+def fala_do_usuario(mensagem: str) -> str:
+    """Só o que o usuário disse: o bot acrescenta notas próprias, como "(Complete o lançamento...)",
+    que citam data e status de lançamentos antigos e enganariam as regras abaixo."""
+    return _NOTA_DO_BOT.sub("", mensagem or "")
+
+
 def _data_foi_dita(mensagem: str) -> bool:
-    return bool(_FALA_DE_DATA.search(catalogo.sem_acento(mensagem)))
+    return bool(_FALA_DE_DATA.search(catalogo.sem_acento(fala_do_usuario(mensagem))))
+
+
+def _despesas(acoes: list[dict]) -> list[dict]:
+    lista = []
+    for acao in acoes:
+        if acao.get("tipo") == "despesa":
+            if not isinstance(acao.get("dados"), dict):
+                acao["dados"] = {}
+            lista.append(acao["dados"])
+    return lista
 
 
 def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> None:
     """Sem data dita, a despesa entra hoje, ainda que o modelo copie a data do documento.
 
     Com a data do recibo ela caía na semana anterior, fora da tela que o gestor
-    estava olhando, e parecia que o bot não tinha lançado nada.
+    estava olhando, e parecia que o bot não tinha lançado nada. Data futura é
+    vencimento lido do documento, nunca o dia do lançamento.
     """
-    if _data_foi_dita(mensagem):
+    dita = _data_foi_dita(mensagem)
+    for dados in _despesas(acoes):
+        data = catalogo.data_ou(dados.get("data"), "")
+        if data > referencia:
+            dados.setdefault("vencimento", data)
+        if not dita or data > referencia:
+            dados["data"] = referencia
+
+
+def status_dito(mensagem: str) -> tuple[str, str]:
+    """Status que o usuário falou, onde quer que esteja na mensagem, e para quem é o reembolso.
+
+    Só vale se a fala trouxer um status só: "uma em aberto e outra reembolso" fica com a IA.
+    """
+    fala = catalogo.sem_acento(fala_do_usuario(mensagem))
+    achados = [status for status, padrao in _FALA_DE_STATUS if re.search(padrao, fala)]
+    if len(achados) != 1:
+        return "", ""
+    quem = ""
+    if achados[0] == "Reembolso":
+        nome = _REEMBOLSO_PARA.search(fala_do_usuario(mensagem))
+        if nome and catalogo.sem_acento(nome.group(1)) not in _NAO_SAO_NOMES:
+            quem = nome.group(1).capitalize()
+    return achados[0], quem
+
+
+def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
+    status, quem = status_dito(mensagem)
+    if not status:
         return
-    for acao in acoes:
-        if acao.get("tipo") == "despesa":
-            if not isinstance(acao.get("dados"), dict):
-                acao["dados"] = {}
-            acao["dados"]["data"] = referencia
+    for dados in _despesas(acoes):
+        dados["status_pagamento"] = status
+        if quem:
+            dados["reembolsar_para"] = quem
 
 
 def _obra_do_lancamento(acao: dict, ids: set[int]) -> int:
@@ -365,6 +445,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     contexto = montar_contexto(obras, referencia, pode_financeiro, pode_gestor, foco)
     sistema = PROMPT_BASE.replace("{catalogo}", catalogo.texto_para_prompt(pode_financeiro, pode_gestor)) \
                          .replace("{padroes}", padroes.texto_para_prompt() if pode_financeiro else "(não se aplica)") \
+                         .replace("{exemplos}", padroes.exemplos_para_prompt(pode_financeiro)) \
                          .replace("{{", "{").replace("}}", "}")
 
     bruto, fonte = ia_provedores.gerar(
@@ -374,6 +455,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     bruto = bruto if isinstance(bruto, dict) else {}
     acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
     _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
+    _aplicar_status_dito(acoes_brutas, mensagem)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:

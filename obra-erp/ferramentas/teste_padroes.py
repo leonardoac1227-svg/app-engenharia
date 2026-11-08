@@ -222,5 +222,57 @@ parcelada = c.post(f'/api/dias/{dia_o13}/despesas', data={'categoria': 'Material
 r = c.post(f'/api/despesas/{parcelada}/mover-obra', json={'dia_id': dia_i19}, headers=H)
 ok(r.status_code == 400 and 'parcelas' in r.get_json()['erro'], 'parcela não muda de obra sozinha', r.get_json())
 
+print('== STATUS DITO NA FALA ==')
+from obra.services.assistente import status_dito
+for fala, esperado in [
+    ('Lance isso na obra 19, rolo de textura, nota em reembolso', ('Reembolso', '')),
+    ('Broca 10mm no engenheiro pro O13 tipo reembolso', ('Reembolso', '')),
+    ('paguei do meu bolso o diesel', ('Reembolso', '')),
+    ('reembolso pro Luiz, digitalização dos projetos', ('Reembolso', 'Luiz')),
+    ('reembolso para mim', ('Reembolso', '')),
+    ('nota da Inova em aberto', ('Em Aberto', '')),
+    ('essa já está paga', ('Pago', '')),
+    ('não foi paga ainda', ('Em Aberto', '')),
+    ('uma em aberto e a outra reembolso', ('', '')),
+    ('nota do engenheiro', ('', '')),
+    ('nota da tinta\n(Complete o lançamento que ficou incompleto — Despesa em 31/10/2026: Tinta · Em Aberto — '
+     'usando esta mensagem e os arquivos dele, reenviados aqui. Não duplique.)', ('', '')),
+]:
+    ok(status_dito(fala) == esperado, f'status de "{fala[:45]}"', status_dito(fala))
+
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [{'tipo': 'despesa', 'dados': {
+    'descricao': 'Rolo de textura para chapisco', 'fornecedor': 'PETROTINTAS E CONSTRUCOES LTDA', 'valor': 28,
+    'status_pagamento': 'Em Aberto'}}]}]
+entregar({'text': 'Lance isso na obra 19, rolo de textura pro chapisco, nota em reembolso'})
+d = lancamento(ultimo_id())
+with app.app_context():
+    from obra.db import um
+    st = um('SELECT status_pagamento, reembolsar_para FROM despesas WHERE id = ?', (ultimo_id(),))
+ok(st['status_pagamento'] == 'Reembolso' and st['reembolsar_para'] == config.REEMBOLSO_PADRAO,
+   'reembolso dito no fim vale mesmo com a IA dizendo "em aberto"', dict(st))
+ok(d['obra_id'] == I19 and d['fornecedor'] == 'Petrotintas', '"obra 19" é o I19 e a razão social fica curta', d)
+
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [{'tipo': 'despesa', 'dados': {
+    'descricao': 'Contrato 1009', 'fornecedor': 'LOCMAQ LOCACAO DE MAQUINAS E EQUIPAMENTOS LTDA', 'valor': 323,
+    'data': '2099-11-20'}}]}]
+entregar({'text': 'contrato da locmaq no I19'})
+d = lancamento(ultimo_id())
+with app.app_context():
+    venc = um('SELECT vencimento FROM despesas WHERE id = ?', (ultimo_id(),))['vencimento']
+ok(d['data'] == hoje_iso() and venc == '2099-11-20' and d['fornecedor'] == 'LOCMAQ',
+   'data futura do documento vira vencimento, e o lançamento entra hoje', (d, venc))
+
+print('== JEITO DE FALAR A OBRA ==')
+from obra.services.assistente import _obras_citadas
+obras_ = [{'id': I19, 'nome': 'I19'}, {'id': O13, 'nome': 'O13'}, {'id': T21, 'nome': 'T21'}]
+for fala, esperado in [('lança na obra 19', [I19]), ('é do I-19', [I19]), ('para o i 19', [I19]),
+                       ('obra do 13', [O13]), ('19 sacos de cimento', []), ('T21 e O13', [O13, T21])]:
+    ok(sorted(_obras_citadas(fala, obras_)) == sorted(esperado), f'obra em "{fala}"', _obras_citadas(fala, obras_))
+
+with app.app_context():
+    ok('Rolo de textura' in pedidos[-1]['sistema'] or 'EXEMPLOS' in pedidos[-1]['sistema'],
+       'a IA recebe os exemplos do jeito da empresa')
+    ok('Nunca deduza "Pago"' in pedidos[-1]['sistema'], 'a regra antiga de "Pago" pelo cupom saiu')
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

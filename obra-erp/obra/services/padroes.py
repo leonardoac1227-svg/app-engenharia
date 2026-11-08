@@ -93,16 +93,25 @@ FORNECEDORES = (
     (r"o engenheiro", "O engenheiro"),
     (r"renova", "Renova"),
     (r"uniformizar", "Uniformizar"),
-    (r"locmaq", "LOCMAQ"),
-    (r"locknal", "Locknal"),
+    (r"locmaq\b.*", "LOCMAQ"),
+    (r"locknal\b.*", "Locknal"),
+    (r"renove\b.*", "Renove"),
+    (r"posto sossego\b.*", "Posto Sossego"),
+    (r"feira epi\b.*", "Feira EPI"),
+    (r"alta tensao\b.*", "Alta tensão"),
+    (r"petrotintas\b.*", "Petrotintas"),
+    (r"feira tintas\b.*", "Feira Tintas"),
 )
 
 _NUMERO_NA_DESCRICAO = re.compile(
     r"[\s\-–·,(]*\b(recibo|nota fiscal|nota|nf-?e?|or[cç]amento|orc)\b\s*(?:n[º°o.]*\s*)?(\d{2,})\)?", re.I)
 _PREFIXO_NUMERO = {"rec": "REC", "orc": "ORC", "orç": "ORC"}
 
-# Status quando nem o gestor nem o documento disseram outra coisa.
-LOJAS_REEMBOLSO = ("O engenheiro", "Renova", "Uniformizar", "Bahia copiadora")
+# Status quando nem o gestor nem o documento disseram outra coisa (histórico real).
+LOJAS_REEMBOLSO = ("O engenheiro", "Renova", "Renove", "Uniformizar", "Bahia copiadora", "Feira EPI",
+                   "Posto Sossego", "Petrotintas", "Feira Tintas")
+
+_SUFIXO_EMPRESA = re.compile(r"\s*(?:\s-\s.*|\b(?:ltda|me|epp|eireli|s/?a)\.?)\s*$", re.I)
 
 
 def fornecedor_padrao(nome) -> str:
@@ -110,7 +119,13 @@ def fornecedor_padrao(nome) -> str:
     for grafia, oficial in FORNECEDORES:
         if re.fullmatch(grafia, alvo):
             return oficial
-    return texto(nome, 120)
+    # Fornecedor novo: tira o que a nota imprime além do nome ("LTDA", " - Feira de Santana").
+    limpo = texto(nome, 120)
+    while True:
+        curto = _SUFIXO_EMPRESA.sub("", limpo).strip(" -,.")
+        if curto == limpo or not curto:
+            return limpo
+        limpo = curto
 
 
 def _separar_numero(saida: dict) -> None:
@@ -171,11 +186,52 @@ def completar(dados: dict, nome_obra: str) -> dict:
     return saida
 
 
+# Falas e o lançamento que a empresa faria, tirados do histórico. Servem de exemplo à IA,
+# que generaliza o raciocínio para falas parecidas.
+EXEMPLOS = (
+    ('"Lança no I19 essa nota da Inova, espaçadores pro porcelanato da piscina" + foto da nota',
+     'despesa: descricao "Espaçadores para assentamento de porcelanato da piscina", fornecedor "Inova civil", '
+     'valor = total da nota, numero_nota = nº da NF, Em Aberto, Material, anexos [0]'),
+    ('"e o frete disso" (logo depois da nota acima)',
+     'despesa: "Frete referente a espaçadores para assentamento de porcelanato da piscina", Diego motoboy, '
+     '30, Em Aberto, Frete'),
+    ('"Comprei broca de 10 no engenheiro pra furar a laje do O13, reembolso" + foto do cupom',
+     'despesa: "Broca 10mm para furos na laje", "O engenheiro", valor do cupom, Reembolso, Material'),
+    ('"Lance isso na obra 19, rolo de textura pro chapisco, nota em reembolso" + cupom',
+     'despesa na obra I19: "Rolo de textura para chapisco em altura", valor do cupom, Reembolso'),
+    ('"Digitalização dos projetos, 69 reais, I19, reembolso pro Luiz"',
+     'despesa: "Digitalização de projetos", 69, Reembolso, reembolsar_para "Luiz", Material'),
+    ('"Diesel pra desmoldar a forma, posto sossego, 11,46, O13"',
+     'despesa: "Diesel para desmoldagem da forma metálica", "Posto Sossego", 11.46, Reembolso'),
+    ('"Três caixas de entulho no O13"',
+     'três ações despesa, cada uma "Caixa de entulho", SOS Entulho, 1, Em Aberto'),
+    ('"Mandei 8 sacos de cimento do I19 pro T21"',
+     'despesa na obra T21: "8 sacos de cimento vindo do I19", sem fornecedor, 1, Em Aberto'),
+    ('"Nota da Central em 3 vezes, materiais hidráulicos da piscina" + nota',
+     'despesa: "Materiais hidráulicos para piscina", "Central da construção", valor = TOTAL da nota, '
+     'parcelas 3, parcela_frequencia mensal, Em Aberto'),
+    ('"Conta da internet de outubro, 79,90, em aberto" + boleto',
+     'despesa: "Conta da internet referente ao mês de outubro", fornecedor do boleto, 79.90, Em Aberto, '
+     'categoria Serviço, vencimento do boleto'),
+    ('"Passa a última nota pra reembolso"',
+     'editar_despesa: despesa_id = o primeiro de lancamentos_recentes, alteracoes {status_pagamento: Reembolso}'),
+    ('"Paguei a nota da Somar do aço"',
+     'pagar_despesa: despesa_id da conta em aberto da Somar com aço (contas_em_aberto)'),
+)
+
+
+def exemplos_para_prompt(pode_financeiro: bool) -> str:
+    if not pode_financeiro:
+        return "(não se aplica)"
+    return "\n".join(f"- {fala}\n  → {acao}" for fala, acao in EXEMPLOS)
+
+
 def texto_para_prompt() -> str:
     linhas = [f"- {p.regra}" for p in PADROES] + [f"- {r}" for r in REGRAS_LIVRES]
     linhas.append("- Nomes de fornecedor: " + ", ".join(dict.fromkeys(n for _, n in FORNECEDORES)) + ".")
     linhas.append("- Lojas de reembolso, salvo se o usuário disser outra coisa: "
-                  + ", ".join(LOJAS_REEMBOLSO) + ". Inova civil e Central da construção ficam Em Aberto.")
+                  + ", ".join(LOJAS_REEMBOLSO) + ". Inova civil, Somar e Central da construção ficam Em Aberto.")
+    linhas.append("- Mais de um frete do mesmo material: um lançamento por frete, \"(frete 1/2)\", \"(frete 2/2)\".")
     return "\n".join(linhas)
 
 

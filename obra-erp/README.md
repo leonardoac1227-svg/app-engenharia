@@ -516,6 +516,12 @@ ficam em `services/padroes.py`:
 | "cimento vindo do O13" | sem fornecedor | R$ 1 | Em Aberto |
 | escoras (contrato + boleto) | o do contrato | o do boleto | conforme o boleto |
 
+**Status como a empresa lança.** O que o gestor fala vale em qualquer parte da
+mensagem ("..., nota em reembolso"). Sem nada dito: nota de fornecedor com conta
+fica Em Aberto e compra de balcão fica Reembolso; "Pago" só quando dito. A IA
+recebe exemplos reais de fala → lançamento (`padroes.EXEMPLOS`) e o estilo de
+descrição curto da empresa. "Obra 19", "I-19" e "i 19" são o I19.
+
 **Data e correção.** Sem data dita, o lançamento entra hoje, mesmo que o
 documento seja de outro dia; se entrar em outra semana, o bot avisa. Cada
 lançamento volta com um `#id`, e dá para corrigir falando: "o valor da última
