@@ -95,7 +95,9 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - O VALOR vem SEMPRE do documento: o TOTAL final a pagar (depois de descontos), nunca subtotal,
   preço unitário ou valor de um item. Leia com atenção foto torta, amassada ou com dedo na frente.
   Só deixe valor 0 se não houver documento ou o total estiver ilegível — e diga isso na resposta.
-- Fornecedor: o nome curto pelo qual a loja é conhecida ("Inova civil", "O engenheiro", "Posto Sossego"),
+- Fornecedor: só o que o usuário disser ou o que estiver impresso no documento. Sem documento e sem
+  fornecedor dito, deixe vazio: não copie de "padroes_recentes" nem de lançamentos parecidos.
+- Nome do fornecedor: o nome curto pelo qual a loja é conhecida ("Inova civil", "O engenheiro", "Posto Sossego"),
   com maiúscula só no começo. Sem "LTDA", CNPJ, cidade ou filial. Número: o da NF; se não for nota fiscal
   (orçamento, pedido, "não é documento fiscal", recibo), o número dele com o tipo na frente
   (ex.: "ORC 31797"). PIX: o ID da transação (E2E) e o recebedor como fornecedor.
@@ -382,6 +384,10 @@ def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> 
         data = catalogo.data_ou(dados.get("data"), "")
         if data > referencia:
             dados.setdefault("vencimento", data)
+            if dita and not dados.get("parcelas_lista"):
+                # "Programe para o dia 20" é conta a pagar nesse dia: entra na
+                # semana em que é paga, sem criar semana futura antes da hora.
+                dados["parcelas_lista"] = [{"vencimento": data, "valor": dados.get("valor")}]
         if not dita or data > referencia:
             dados["data"] = referencia
 
@@ -495,9 +501,9 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
         max_tokens=8192, pensar="baixo", prazo=prazo - (time.monotonic() - inicio))
     bruto = bruto if isinstance(bruto, dict) else {}
     acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
-    _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
     _aplicar_status_dito(acoes_brutas, mensagem)
     _parcelamento_so_se_dito(acoes_brutas, mensagem)
+    _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:

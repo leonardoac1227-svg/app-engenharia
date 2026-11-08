@@ -457,5 +457,18 @@ with app.app_context():
     equipe_semana = {e['nome'] for e in ocorrencias_da_semana(O13, listar_dias(semana_id))['equipe']}
 ok('Bira' not in equipe_semana, 'avulso não conta falta nos outros dias da semana', equipe_semana)
 
+print('== DATA FUTURA DITA E FORNECEDOR NÃO DITO ==')
+SEXTA_LONGE = HOJE + timedelta(days=(4 - HOJE.weekday()) % 7 + 21)
+fila_ia[:] = [{'obra_id': I19, 'resposta': 'Programado.', 'acoes': [{'tipo': 'despesa', 'dados': {
+    'descricao': 'Boleto do contrato 1009', 'fornecedor': 'LOCMAQ', 'valor': 323,
+    'data': SEXTA_LONGE.isoformat(), 'numero_nota': 'CT 1009'}}]}]
+n_semanas = len(c.get(f'/api/obras/{I19}/semanas').get_json())
+entregar({'text': f'programe esse boleto para o dia {SEXTA_LONGE.strftime("%d/%m")} e lance nesse dia, I19'})
+g = grupo_de(ultimo_id())
+ok(len(g) == 1 and g[0]['vencimento'] == SEXTA_LONGE.isoformat(), 'data futura dita vira o vencimento programado', g)
+ok(len(c.get(f'/api/obras/{I19}/semanas').get_json()) == n_semanas, 'sem criar semana futura antes da hora')
+with app.app_context():
+    ok('não copie de "padroes_recentes"' in pedidos[-1]['sistema'], 'a IA não deve inventar o fornecedor')
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

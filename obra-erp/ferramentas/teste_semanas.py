@@ -203,6 +203,14 @@ ok('2026-10-26' not in inicios(ATIVA), 'falha não cria semana pela metade')
 conferir(date(2026, 10, 26))
 ok('2026-10-26' in inicios(ATIVA), 'depois de uma falha a conferência tenta de novo', inicios(ATIVA))
 
+FUTURA = obra_nova('Com semana futura', data_inicio='2026-09-01')
+c.post(f'/api/obras/{FUTURA}/semanas', json={'data_inicio': '2026-10-05'}, headers=H)
+c.post(f'/api/obras/{FUTURA}/semanas', json={'data_inicio': '2026-10-19'}, headers=H)   # criada antes da hora
+conferir(date(2026, 10, 13))
+semanas_futura = [(s['numero'], s['data_inicio']) for s in c.get(f'/api/obras/{FUTURA}/semanas').get_json()]
+ok(semanas_futura == [(1, '2026-10-05'), (2, '2026-10-12'), (3, '2026-10-19')],
+   'semana futura já criada não faz pular a semana atual, e a numeração segue as datas', semanas_futura)
+
 with app.test_request_context():
     from obra.db import um as linha
     auditoria = linha("SELECT usuario_nome FROM auditoria WHERE acao = 'criou_semana' ORDER BY id DESC LIMIT 1")

@@ -50,9 +50,24 @@ _conferido_em = None
 
 def criar_semana_em(obra_id: int, inicio: str, meta: str = "", orcamento: float = 0,
                     usuario=None) -> dict:
-    """Cria a semana que começa em `inicio` (uma segunda-feira) com os seus 7 dias."""
-    ultima = um("SELECT numero FROM semanas WHERE obra_id = ? ORDER BY numero DESC LIMIT 1", (obra_id,))
-    numero_novo = (ultima["numero"] + 1) if ultima else 1
+    """Cria a semana que começa em `inicio` (uma segunda-feira) com os seus 7 dias.
+
+    O número segue a ordem das datas. Se já existe semana depois desta (criada
+    antes da hora por um lançamento futuro) com o mesmo número, as seguintes
+    andam uma casa, para a lista não ficar "Semana 13 · 16/11" antes da
+    "Semana 14 · 09/11".
+    """
+    anterior = um("""SELECT MAX(numero) AS n FROM semanas
+                     WHERE obra_id = ? AND data_inicio < ?""", (obra_id, inicio))
+    numero_novo = ((anterior["n"] if anterior else None) or 0) + 1
+    seguinte = um("""SELECT MIN(numero) AS n FROM semanas
+                     WHERE obra_id = ? AND data_inicio > ?""", (obra_id, inicio))
+    if seguinte and seguinte["n"] is not None and seguinte["n"] <= numero_novo:
+        executar("UPDATE semanas SET numero = numero + 1 WHERE obra_id = ? AND data_inicio > ?",
+                 (obra_id, inicio))
+    elif not (anterior and anterior["n"]):
+        ultima = um("SELECT MAX(numero) AS n FROM semanas WHERE obra_id = ?", (obra_id,))
+        numero_novo = ((ultima["n"] if ultima else None) or 0) + 1
     cur = executar(
         """INSERT INTO semanas (obra_id, numero, data_inicio, meta, meta_atingida,
                                 orcamento_previsto, fechada, criado_em)
@@ -116,8 +131,11 @@ def garantir_semanas_em_dia(hoje: date | None = None) -> int:
     hoje = hoje or date.today()
     obras = todos(
         """SELECT o.id, o.data_inicio,
-                  (SELECT MAX(s.data_inicio) FROM semanas s WHERE s.obra_id = o.id) AS ultima
-             FROM obras o WHERE o.arquivada = 0 AND o.status = 'ativa'""")
+                  (SELECT MAX(s.data_inicio) FROM semanas s
+                    WHERE s.obra_id = o.id AND s.data_inicio <= ?) AS ultima
+             FROM obras o WHERE o.arquivada = 0 AND o.status = 'ativa'""",
+        # Semana futura já criada não conta: a da semana atual pode estar faltando.
+        (segunda_da_semana(hoje),))
     criadas = 0
     for obra in obras:
         try:
