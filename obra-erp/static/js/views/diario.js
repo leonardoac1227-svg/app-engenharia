@@ -7,13 +7,14 @@ import { comprimirLote } from '../compressao.js';
 import { estado, podeFinanceiro, podeLancar } from '../estado.js';
 import { recarregarSemana } from '../navegacao.js';
 import {
-  abrirLightbox, badgeStatus, confirmar, dataBR, esc, moeda, num, toast, tratarFotosQuebradas, vazio,
+  abrirLightbox, badgeStatus, confirmar, dataBR, esc, formularioModal, moeda, num, toast, tratarFotosQuebradas,
+  vazio,
 } from '../util.js';
 import { abrirAssistente } from './assistente.js';
 import { htmlBarraSemana, htmlDiasStrip, ligarBarraSemana } from './comum.js';
 import { abrirModalDespesa, htmlAnexos, ligarLinksAnexo, textoReembolso } from './financeiro.js';
 
-let cacheDia = { horas: {}, despesas: [] };
+let cacheDia = { horas: {}, despesas: [], avulsos: [] };
 const secoesAbertas = {};
 
 // Sugestões que aparecem ao tocar no campo de justificativa (dá para digitar outra).
@@ -32,11 +33,40 @@ function diaSelecionado() {
 }
 
 async function carregarDadosDoDia(dia) {
-  const [horas, despesas] = await Promise.all([
+  const [horas, despesas, avulsos] = await Promise.all([
     api.get(`/api/dias/${dia.id}/horas`),
     podeFinanceiro() ? api.get(`/api/dias/${dia.id}/despesas`) : Promise.resolve([]),
+    api.get(`/api/dias/${dia.id}/avulsos`),
   ]);
-  cacheDia = { horas, despesas };
+  cacheDia = { horas, despesas, avulsos };
+}
+
+// Uma linha do ponto: da equipe da obra ou avulso (diária de quem não é dela).
+function htmlLinhaPonto(f, meta, somenteLeitura) {
+  const registro = cacheDia.horas[String(f.id)];
+  const horas = registro ? registro.horas : 0;
+  return `
+    <div class="staff-row">
+      <div class="staff-view">
+        <div class="staff-info">
+          <div class="staff-name">${esc(f.nome)}</div>
+          <div class="staff-meta">${esc(meta)}</div>
+        </div>
+        <div class="contador">
+          <button type="button" data-passo="-1" ${somenteLeitura ? 'disabled' : ''}>−</button>
+          <input type="number" class="campo-horas" min="0" max="24" step="0.5"
+                 value="${horas || ''}" placeholder="0" inputmode="decimal"
+                 data-func="${f.id}" ${somenteLeitura ? 'disabled' : ''}>
+          <button type="button" data-passo="1" ${somenteLeitura ? 'disabled' : ''}>+</button>
+        </div>
+      </div>
+      <div class="ponto-falta hidden" data-falta="${f.id}">
+        <span class="ponto-falta-rotulo"></span>
+        <input type="text" class="campo-justificativa" data-func="${f.id}" list="motivosFalta"
+               maxlength="160" autocomplete="off" placeholder="Justificativa (ex: atestado médico)"
+               value="${esc(registro?.justificativa || '')}" ${somenteLeitura ? 'disabled' : ''}>
+      </div>
+    </div>`;
 }
 
 export async function renderizar(raiz) {
@@ -153,47 +183,27 @@ export async function renderizar(raiz) {
         <span class="acc-chevron">›</span>
       </summary>
       <div class="acc-body">
-        ${estado.funcionarios.length ? `
-          ${somenteLeitura ? '' : `
+        ${estado.funcionarios.length || cacheDia.avulsos.length ? `
+          ${somenteLeitura || !estado.funcionarios.length ? '' : `
             <div class="btn-linha" style="margin-top:4px">
               <button class="btn btn-ghost btn-small" data-acao="repetir-ponto" style="flex:1">↺ Repetir último dia</button>
               <button class="btn btn-ghost btn-small" data-acao="jornada-padrao" style="flex:1">${num(estado.jornadaHoras)}h para todos</button>
             </div>` }
           <div class="lista" id="listaPonto" style="margin-top:12px">
-            ${estado.funcionarios.map((f) => {
-              const registro = cacheDia.horas[String(f.id)];
-              const horas = registro ? registro.horas : 0;
-              return `
-                <div class="staff-row">
-                  <div class="staff-view">
-                    <div class="staff-info">
-                      <div class="staff-name">${esc(f.nome)}</div>
-                      <div class="staff-meta">${esc(f.funcao || 'sem função')}</div>
-                    </div>
-                    <div class="contador">
-                      <button type="button" data-passo="-1" ${somenteLeitura ? 'disabled' : ''}>−</button>
-                      <input type="number" class="campo-horas" min="0" max="24" step="0.5"
-                             value="${horas || ''}" placeholder="0" inputmode="decimal"
-                             data-func="${f.id}" ${somenteLeitura ? 'disabled' : ''}>
-                      <button type="button" data-passo="1" ${somenteLeitura ? 'disabled' : ''}>+</button>
-                    </div>
-                  </div>
-                  <div class="ponto-falta hidden" data-falta="${f.id}">
-                    <span class="ponto-falta-rotulo"></span>
-                    <input type="text" class="campo-justificativa" data-func="${f.id}" list="motivosFalta"
-                           maxlength="160" autocomplete="off" placeholder="Justificativa (ex: atestado médico)"
-                           value="${esc(registro?.justificativa || '')}" ${somenteLeitura ? 'disabled' : ''}>
-                  </div>
-                </div>`;
-            }).join('')}
+            ${estado.funcionarios.map((f) => htmlLinhaPonto(f, f.funcao || 'sem função', somenteLeitura)).join('')}
+            ${cacheDia.avulsos.map((a) => htmlLinhaPonto({ id: a.funcionario_id, nome: a.nome },
+              a.obra_origem ? `Avulso · da obra ${a.obra_origem}` : 'Avulso (diária)', somenteLeitura)).join('')}
           </div>
           <datalist id="motivosFalta">
             ${MOTIVOS_FALTA.map((m) => `<option value="${esc(m)}"></option>`).join('')}
           </datalist>
           <div class="ledger-total" id="totalHorasDia"></div>
-          ${somenteLeitura ? '' : '<button class="btn btn-brass" data-acao="salvar-ponto">Salvar ponto do dia</button>'}
+          ${somenteLeitura ? '' : `
+            <button class="btn btn-outline btn-small" data-acao="avulso" style="margin-bottom:10px">+ Avulso (diária de quem não é desta obra)</button>
+            <button class="btn btn-brass" data-acao="salvar-ponto">Salvar ponto do dia</button>`}
         ` : vazio('☰', 'Nenhum profissional cadastrado nesta obra.',
-            '<button class="btn btn-outline" data-ir-equipe="1">Cadastrar equipe</button>')}
+            `<button class="btn btn-outline" data-ir-equipe="1">Cadastrar equipe</button>
+             ${somenteLeitura ? '' : '<button class="btn btn-ghost btn-small" data-acao="avulso" style="margin-top:8px">+ Lançar avulso (diária)</button>'}`)}
       </div>
     </details>
 
@@ -368,6 +378,28 @@ function ligarEventos(raiz, dia) {
       await recarregarSemana({ manterDia: true });
     };
   }
+
+  raiz.querySelectorAll('[data-acao=avulso]').forEach((btn) => {
+    btn.onclick = async () => {
+      const dados = await formularioModal({
+        titulo: 'Avulso no ponto do dia',
+        descricao: 'Para quem passou uma ou duas diárias aqui sem ser desta obra. Ele não entra na equipe: '
+          + 'se for de outra obra, continua lá; se não tiver cadastro, fica só neste ponto.',
+        campos: [
+          { nome: 'nome', rotulo: 'Nome', placeholder: 'Ex.: Bira, ou o nome de alguém de outra obra' },
+          { nome: 'funcao', rotulo: 'Função (opcional)', placeholder: 'Ex.: servente' },
+          { nome: 'horas', rotulo: 'Horas no dia', tipo: 'number', valor: estado.jornadaHoras },
+        ],
+        rotulo: 'Lançar avulso',
+      });
+      if (!dados || !dados.nome.trim()) return;
+      await api.post(`/api/dias/${dia.id}/horas/avulso`, {
+        nome: dados.nome.trim(), funcao: dados.funcao.trim(), horas: dados.horas || estado.jornadaHoras,
+      });
+      toast('Avulso lançado no ponto do dia.', 'ok');
+      await recarregarSemana({ manterDia: true });
+    };
+  });
 
   const btnSalvarPonto = raiz.querySelector('[data-acao=salvar-ponto]');
   if (btnSalvarPonto) {

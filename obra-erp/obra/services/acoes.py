@@ -237,37 +237,53 @@ def _n_ponto(d, ctx):
         fid = inteiro(r.get("funcionario_id"))
         if fid not in {f["id"] for f in ctx.funcionarios}:
             fid = casar_funcionario(nome, ctx.funcionarios)
-        if not fid and not (nome and ctx.pode_gestor):
+        # Avulso: não é da equipe desta obra e não deve virar cadastro dela.
+        avulso = bool(r.get("avulso")) and not fid and bool(nome)
+        if not fid and not avulso and not (nome and ctx.pode_gestor):
             continue
-        horas = min(max(valor(r.get("horas")), 0), 24)
-        registros.append({"funcionario_id": fid,
-                          "nome": next((f["nome"] for f in ctx.funcionarios if f["id"] == fid), nome),
-                          "horas": horas,
-                          "justificativa": "" if horas >= config.JORNADA_HORAS
-                          else texto(r.get("justificativa"), 160)})
+        # "Fez uma diária" sem horas ditas = a jornada; para a equipe da obra o padrão segue zero.
+        sem_horas = r.get("horas") in (None, "")
+        horas = config.JORNADA_HORAS if avulso and sem_horas else min(max(valor(r.get("horas")), 0), 24)
+        registro = {"funcionario_id": fid,
+                    "nome": next((f["nome"] for f in ctx.funcionarios if f["id"] == fid), nome),
+                    "horas": horas,
+                    "justificativa": "" if horas >= config.JORNADA_HORAS
+                    else texto(r.get("justificativa"), 160)}
+        if avulso:
+            registro["avulso"] = True
+        registros.append(registro)
     if not registros:
         raise Pular("Ninguém da equipe foi reconhecido para o ponto.")
     return {"data": data_ou(d.get("data"), ctx.referencia), "registros": registros}
 
 
 def _e_ponto(ex, d, arq):
+    dia = ex.dia(d["data"])
+    avulsos = [r for r in d["registros"] if r.get("avulso")]
+    for r in avulsos:
+        ex.req("POST", f"/api/dias/{dia}/horas/avulso",
+               json={"nome": r["nome"], "horas": r["horas"], "justificativa": r.get("justificativa", "")})
     registros = [{"funcionario_id": r["funcionario_id"] or ex.novos.get(sem_acento(r["nome"]), 0),
-                  "horas": r["horas"], "justificativa": r.get("justificativa", "")} for r in d["registros"]]
+                  "horas": r["horas"], "justificativa": r.get("justificativa", "")}
+                 for r in d["registros"] if not r.get("avulso")]
     registros = [r for r in registros if r["funcionario_id"]]
-    if not registros:
+    if not registros and not avulsos:
         raise ex.Erro("Nenhum funcionário cadastrado para este ponto.")
-    ex.req("PUT", f"/api/dias/{ex.dia(d['data'])}/horas", json={"registros": registros})
+    if registros:
+        ex.req("PUT", f"/api/dias/{dia}/horas", json={"registros": registros})
 
 
 _registrar(TipoAcao(
     "ponto", "Ponto da equipe",
-    "data, registros: [{funcionario_id, nome, horas, justificativa}] — um por pessoa citada; "
+    "data, registros: [{funcionario_id, nome, horas, justificativa, avulso}] — um por pessoa citada "
+    "(avulso true = diária de quem não é desta obra); "
     "equipe_inteira (true = todos da equipe ativa) + horas (se não for a jornada), com as exceções em registros. "
     "Jornada completa = jornada_horas; manhã e tarde (ou sem turno dito) = jornada; só um turno = metade; "
     "faltou = 0 horas com justificativa; abaixo da jornada, justificativa com o motivo dito",
     _n_ponto, _e_ponto,
     lambda d: f"Ponto de {data_br(d['data'])}: " + ", ".join(
-        f"{r['nome']} {r['horas']:g}h" + (f" ({r['justificativa']})" if r.get("justificativa") else "")
+        f"{r['nome']} {r['horas']:g}h" + (" (avulso)" if r.get("avulso") else "")
+        + (f" ({r['justificativa']})" if r.get("justificativa") else "")
         for r in d["registros"]),
     quando="horas trabalhadas, presença, faltas e atrasos; também quando o relato do dia cita quem trabalhou"))
 
@@ -785,7 +801,7 @@ ESQUEMA_DADOS = {
         "parcelas_lista": {"type": "array", "items": {"type": "object", "properties": {
             "vencimento": _S, "valor": _N}}},
         "registros": {"type": "array", "items": {"type": "object", "properties": {
-            "funcionario_id": _I, "nome": _S, "horas": _N, "justificativa": _S}}},
+            "funcionario_id": _I, "nome": _S, "horas": _N, "justificativa": _S, "avulso": _B}}},
         "alteracoes": {"type": "object", "properties": _ALTERACOES},
     },
 }

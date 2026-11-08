@@ -175,6 +175,10 @@ EQUIPE
 - "Voltou", "foi readmitido": editar_funcionario com alteracoes.ativo = true.
 - Pessoa nova citada com função ("entrou o Marcos, armador"): funcionario. Mudou função, telefone ou PIX:
   editar_funcionario só com o que mudou.
+- AVULSO: quem passou uma ou duas diárias nesta obra sem ser dela ("o Zé do O13 veio ajudar hoje",
+  "um avulso, o Bira, fez uma diária", "o Ademir passou o dia no T21"): registro no ponto da obra onde
+  trabalhou com avulso = true e o nome. NÃO crie funcionario nem editar_funcionario: ele não entra na
+  equipe desta obra e continua na equipe da obra dele.
 - Exemplo: "o efetivo todo compareceu hoje, o Carlos foi demitido" → editar_funcionario {nome "Carlos",
   alteracoes {ativo false}} + ponto {equipe_inteira true}.
 

@@ -145,6 +145,21 @@ paleta inteira é editar o bloco `:root`.
 
 ---
 
+## Funcionário avulso
+
+Quem passa uma ou duas diárias numa obra que não é a dele entra no ponto do
+dia como **avulso**, sem cadastro novo e sem sair da equipe de origem. No
+Diário, em Ponto da equipe, toque em **+ Avulso** e informe o nome. Se ele é de
+outra obra, o ponto aponta para o cadastro de lá e aparece como "Avulso · da
+obra O13"; se não tem cadastro, nasce um registro avulso que não aparece nas
+listas da equipe nem conta falta nos outros dias. "Repetir último dia" não
+copia avulsos.
+
+Pelo bot: "o Ademir do I19 passou o dia no O13", "um avulso, o Bira, fez uma
+diária". Diária sem horas ditas vale a jornada.
+
+---
+
 ## Semanas automáticas
 
 Toda obra **ativa** ganha sozinha a semana que começou na segunda, e as semanas

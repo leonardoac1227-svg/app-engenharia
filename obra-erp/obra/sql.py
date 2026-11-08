@@ -136,6 +136,7 @@ CREATE TABLE IF NOT EXISTS funcionarios (
     documento TEXT DEFAULT '',
     telefone TEXT DEFAULT '',
     ativo INTEGER NOT NULL DEFAULT 1,
+    avulso INTEGER NOT NULL DEFAULT 0,
     criado_em TEXT
 );
 

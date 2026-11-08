@@ -88,7 +88,7 @@ def ocorrencias_da_semana(obra_id: int, dias: list[dict]) -> dict:
     com_registro = {funcionario for (_, funcionario) in registros}
     funcionarios = [dict(f) for f in todos(
         """SELECT id, nome, funcao, ativo, criado_em FROM funcionarios
-            WHERE obra_id = ? ORDER BY nome""", (obra_id,))
+            WHERE obra_id = ? AND COALESCE(avulso, 0) = 0 ORDER BY nome""", (obra_id,))
         if f["ativo"] or f["id"] in com_registro]
 
     dias_com_ponto = {dia_id for (dia_id, _) in registros}

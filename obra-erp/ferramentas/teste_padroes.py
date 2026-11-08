@@ -417,5 +417,45 @@ ok(ponto_hoje_o13().get('José Lima') == 4 and 'José Lima' not in ativos_o13(),
 with app.app_context():
     ok('pediu as contas' in pedidos[-1]['sistema'], 'a IA conhece as falas de demissão')
 
+print('== AVULSO: DIÁRIA DE QUEM NÃO É DA OBRA ==')
+ADEMIR_I19 = c.post(f'/api/obras/{I19}/funcionarios', json={'nome': 'Ademir Souza', 'funcao': 'Pedreiro'}, headers=H).get_json()['id']
+equipe_i19 = lambda: {f['nome'] for f in c.get(f'/api/obras/{I19}/funcionarios').get_json()}
+equipe_o13 = lambda: {f['nome'] for f in c.get(f'/api/obras/{O13}/funcionarios').get_json()}
+antes_o13 = equipe_o13()
+
+transcricoes[:] = ['O Ademir do I19 passou o dia hoje no O13 ajudando, e um avulso, o Bira, fez uma diária.']
+fila_ia[:] = [{'obra_id': O13, 'resposta': 'Feito.', 'acoes': [{'tipo': 'ponto', 'dados': {'registros': [
+    {'nome': 'Ademir', 'horas': 8, 'avulso': True}, {'nome': 'Bira', 'avulso': True}]}}]}]
+entregar({'voice': {'file_id': 'v', 'mime_type': 'audio/ogg'}})
+p = ponto_hoje_o13()
+ok(p.get('Ademir Souza') == 8 and p.get('Bira') == 8, 'os dois entram no ponto do O13 (diária sem horas = jornada)', p)
+ok(equipe_o13() == antes_o13, 'a equipe do O13 não muda', equipe_o13() - antes_o13)
+ok('Ademir Souza' in equipe_i19(), 'o Ademir continua na equipe do I19', equipe_i19())
+ok('(avulso)' in enviadas[-1]['text'], 'o bot avisa que foi avulso', enviadas[-1]['text'])
+
+with app.app_context():
+    from obra.db import um
+    dia_o13 = um("""SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
+                     WHERE s.obra_id = ? AND d.data = ?""", (O13, hoje_iso()))['id']
+av = c.get(f'/api/dias/{dia_o13}/avulsos').get_json()
+ok({(a['nome'], a['obra_origem']) for a in av} == {('Ademir Souza', 'I19'), ('Bira', '')},
+   'a tela lista os avulsos do dia com a obra de origem', av)
+bira = next(a['funcionario_id'] for a in av if a['nome'] == 'Bira')
+r = c.put(f'/api/dias/{dia_o13}/horas', json={'registros': [{'funcionario_id': bira, 'horas': 4, 'justificativa': 'meio dia'}]},
+          headers=H)
+ok(r.status_code == 200 and ponto_hoje_o13().get('Bira') == 4, 'as horas do avulso são corrigidas pela tela do ponto')
+c.post(f'/api/dias/{dia_o13}/horas/avulso', json={'nome': 'Bira', 'horas': 8}, headers=H)
+with app.app_context():
+    from obra.db import um
+    n_bira = um("SELECT COUNT(*) AS n FROM funcionarios WHERE nome = 'Bira'")['n']
+ok(n_bira == 1 and ponto_hoje_o13().get('Bira') == 8, 'o mesmo avulso de novo não duplica o cadastro')
+r = c.post(f'/api/dias/{dia_o13}/horas/repetir', json={}, headers=H)
+with app.app_context():
+    from obra.services.ponto import ocorrencias_da_semana
+    from obra.services.fechamento import listar_dias
+    semana_id = um('SELECT semana_id FROM dias WHERE id = ?', (dia_o13,))['semana_id']
+    equipe_semana = {e['nome'] for e in ocorrencias_da_semana(O13, listar_dias(semana_id))['equipe']}
+ok('Bira' not in equipe_semana, 'avulso não conta falta nos outros dias da semana', equipe_semana)
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)
