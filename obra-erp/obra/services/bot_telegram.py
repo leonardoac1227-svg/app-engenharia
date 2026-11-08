@@ -400,6 +400,7 @@ def _arquivos_para_pendente(acao: dict, arquivos: list[dict]) -> tuple[dict, lis
 # ---------------------------------------------------------------- processamento
 
 def processar(app, chat_id: str, texto_msg: str, lote: str = "", esperar: bool = True) -> None:
+    log.info("Telegram %s: mensagem recebida, processando", chat_id)
     if esperar and ATRASO_LOTE:
         time.sleep(ATRASO_LOTE)
     if not vinculo(chat_id):

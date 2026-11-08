@@ -415,6 +415,21 @@ ok(c.delete('/api/telegram/conexao', headers=H).status_code == 200, 'desconectar
 entregar({'text': 'oi'})
 ok('privado' in ultima(), 'depois de desconectar, o bot não atende')
 
+print('== TELEGRAM QUE NÃO RESPONDE ==')
+import importlib, time as _t
+from obra.services import telegram_api as tapi_real
+importlib.reload(tapi_real)
+urlopen_original = tapi_real.urllib.request.urlopen
+tapi_real.urllib.request.urlopen = lambda *a, **k: _t.sleep(30)
+tapi_real.TEMPO_LIMITE = 1
+inicio = _t.monotonic()
+try:
+    tapi_real.chamar('getMe'); ok(False, 'chamada presa deveria falhar')
+except tapi_real.ErroTelegram as erro:
+    ok(_t.monotonic() - inicio < 5 and 'não respondeu' in str(erro),
+       'chamada presa (até no DNS) desiste no prazo, com motivo', (round(_t.monotonic() - inicio, 1), str(erro)))
+tapi_real.urllib.request.urlopen = urlopen_original
+
 from obra.sql import para_postgres
 ok('RETURNING' not in para_postgres("INSERT INTO telegram_codigos (codigo, usuario_id, expira_em) VALUES (?, ?, ?)"),
    'Postgres: código de conexão sem RETURNING id')

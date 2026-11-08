@@ -11,6 +11,8 @@ import hashlib
 import hmac
 import json
 import logging
+import threading
+import time
 import urllib.error
 import urllib.request
 import uuid
@@ -21,13 +23,44 @@ log = logging.getLogger(__name__)
 
 API = "https://api.telegram.org/bot{token}/{metodo}"
 ARQUIVO = "https://api.telegram.org/file/bot{token}/{caminho}"
-TEMPO_LIMITE = 30
+TEMPO_LIMITE = 15            # segundos por chamada, contando a resolução do endereço
+TEMPO_ARQUIVO = 45
 LIMITE_TEXTO = 4000  # o Telegram corta em 4096 caracteres
 _eu: dict = {}
 
 
 class ErroTelegram(Exception):
     pass
+
+
+def _abrir(req, tempo: float):
+    """`urlopen` com prazo total.
+
+    O `timeout` do urllib não cobre a resolução do endereço (DNS): com ela
+    presa, a chamada ficava parada sem limite, sem erro e sem log — o bot
+    simplesmente não respondia. Aqui a chamada roda à parte e o prazo vale
+    para tudo.
+    """
+    resultado: dict = {}
+
+    def rodar():
+        try:
+            with urllib.request.urlopen(req, timeout=tempo) as resposta:
+                resultado["dados"] = resposta.read()
+        except Exception as erro:  # noqa: BLE001 — repassado abaixo
+            resultado["erro"] = erro
+
+    inicio = time.monotonic()
+    linha = threading.Thread(target=rodar, daemon=True)
+    linha.start()
+    linha.join(tempo + 2)
+    if linha.is_alive():
+        log.warning("Telegram: sem resposta em %.0fs (%s)", time.monotonic() - inicio,
+                    getattr(req, "full_url", req).split("/bot")[0])
+        raise ErroTelegram(f"o Telegram não respondeu em {tempo:.0f}s")
+    if "erro" in resultado:
+        raise resultado["erro"]
+    return resultado["dados"]
 
 
 def configurado() -> bool:
@@ -54,8 +87,7 @@ def chamar(metodo: str, **parametros):
         data=json.dumps(parametros).encode("utf-8"),
         headers={"content-type": "application/json"}, method="POST")
     try:
-        with urllib.request.urlopen(req, timeout=TEMPO_LIMITE) as resposta:
-            dados = json.loads(resposta.read().decode("utf-8"))
+        dados = json.loads(_abrir(req, TEMPO_LIMITE).decode("utf-8"))
     except urllib.error.HTTPError as erro:
         try:
             dados = json.loads(erro.read().decode("utf-8"))
@@ -69,8 +101,7 @@ def chamar(metodo: str, **parametros):
 def baixar(file_id: str) -> bytes:
     info = chamar("getFile", file_id=file_id)
     url = ARQUIVO.format(token=config.TELEGRAM_BOT_TOKEN, caminho=info["file_path"])
-    with urllib.request.urlopen(url, timeout=60) as resposta:
-        return resposta.read()
+    return _abrir(url, TEMPO_ARQUIVO)
 
 
 def enviar(chat_id, texto: str, botoes: list[list[dict]] | None = None) -> None:
@@ -99,8 +130,7 @@ def enviar_arquivo(chat_id, dados: bytes, nome: str, mime: str, legenda: str = "
     req = urllib.request.Request(
         API.format(token=config.TELEGRAM_BOT_TOKEN, metodo="sendDocument"), data=b"".join(partes),
         headers={"content-type": f"multipart/form-data; boundary={fronteira}"}, method="POST")
-    with urllib.request.urlopen(req, timeout=60) as resposta:
-        corpo = json.loads(resposta.read().decode("utf-8"))
+    corpo = json.loads(_abrir(req, TEMPO_ARQUIVO).decode("utf-8"))
     if not corpo.get("ok"):
         raise ErroTelegram(corpo.get("description") or "Falha ao enviar o arquivo.")
 
