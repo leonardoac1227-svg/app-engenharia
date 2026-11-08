@@ -47,6 +47,7 @@ class Contexto:
     pode_gestor: bool
     arquivos: list = field(default_factory=list)
     _funcionarios: list | None = None
+    desligados: set = field(default_factory=set)   # saem da equipe nesta mesma mensagem
 
     @property
     def funcionarios(self) -> list[dict]:
@@ -121,12 +122,12 @@ def indices(lista, arquivos: list, somente_imagem: bool = False) -> list[int]:
     return validos
 
 
-def casar_funcionario(nome: str, funcionarios: list[dict]) -> int:
+def casar_funcionario(nome: str, funcionarios: list[dict], incluir_inativos: bool = False) -> int:
     """Encontra o funcionário pelo nome falado ("o João" → "João Batista")."""
     alvo = sem_acento(nome)
     if not alvo:
         return 0
-    ativos = [f for f in funcionarios if f.get("ativo", 1)]
+    ativos = [f for f in funcionarios if incluir_inativos or f.get("ativo", 1)]
     exatos = [f["id"] for f in ativos if sem_acento(f["nome"]) == alvo]
     if len(exatos) == 1:
         return exatos[0]
@@ -136,11 +137,14 @@ def casar_funcionario(nome: str, funcionarios: list[dict]) -> int:
     return parciais[0] if len(parciais) == 1 else 0
 
 
-def _funcionario(d: dict, ctx: Contexto) -> dict:
+def _funcionario(d: dict, ctx: Contexto, incluir_inativos: bool = False) -> dict:
     fid = inteiro(d.get("funcionario_id"))
     validos = {f["id"]: f for f in ctx.funcionarios}
     if fid not in validos:
         fid = casar_funcionario(texto(d.get("nome"), 120), ctx.funcionarios)
+        if not fid and incluir_inativos:
+            # Readmitir: quem voltou está fora da equipe ativa.
+            fid = casar_funcionario(texto(d.get("nome"), 120), ctx.funcionarios, incluir_inativos=True)
     if not fid:
         raise Pular(f"Funcionário \"{d.get('nome') or d.get('funcionario_id')}\" não encontrado na equipe.")
     return validos[fid]
@@ -217,7 +221,8 @@ def _equipe_inteira(d, ctx) -> list[dict]:
                 for r in d.get("registros") or [] if isinstance(r, dict)}
     horas = valor(d.get("horas")) or config.JORNADA_HORAS
     return [{"funcionario_id": f["id"], "nome": f["nome"], "horas": horas}
-            for f in ctx.funcionarios if f.get("ativo", 1) and f["id"] not in citados]
+            for f in ctx.funcionarios
+            if f.get("ativo", 1) and f["id"] not in citados and f["id"] not in ctx.desligados]
 
 
 def _n_ponto(d, ctx):
@@ -301,8 +306,19 @@ _registrar(TipoAcao(
     quando="pessoa nova citada que não está na equipe (crie junto com o ponto dela)"))
 
 
+def _desliga(d: dict) -> bool | None:
+    """True = sai da equipe, False = volta, None = não mexe na situação."""
+    origem = d.get("alteracoes") if isinstance(d.get("alteracoes"), dict) else d
+    ativo = origem.get("ativo")
+    if ativo in (False, 0, "0", "false", "nao", "não"):
+        return True
+    if ativo in (True, 1, "1", "true", "sim"):
+        return False
+    return None
+
+
 def _n_editar_funcionario(d, ctx):
-    f = _funcionario(d, ctx)
+    f = _funcionario(d, ctx, incluir_inativos=_desliga(d) is False)
     # "nome" fora de "alteracoes" identifica a pessoa; dentro, é o nome novo.
     origem = d.get("alteracoes") if isinstance(d.get("alteracoes"), dict) else \
         {k: v for k, v in d.items() if k != "nome"}
@@ -330,7 +346,8 @@ _registrar(TipoAcao(
     lambda d: f"{d['nome_atual']}: " + ("desligado da equipe" if d["alteracoes"].get("ativo") is False else
                                         ", ".join(f"{k.replace('_', ' ')} → {v}" for k, v in d["alteracoes"].items())),
     permissao="gestor",
-    quando="mudar função, telefone, PIX, ou desligar alguém da equipe"))
+    quando="mudar função, telefone, PIX; demitido, mandado embora, saiu da obra = alteracoes.ativo false "
+           "(sai da lista, o histórico de ponto fica); voltou, foi readmitido = ativo true"))
 
 
 # ---------------------------------------------------------------- fotos
@@ -815,6 +832,15 @@ def texto_para_prompt(ctx_financeiro: bool, ctx_gestor: bool) -> str:
 def normalizar(bruto_acoes, ctx: Contexto) -> tuple[list[dict], list[str]]:
     """Confere cada ação contra os dados reais e o perfil. Devolve (ações, avisos)."""
     acoes, avisos = [], []
+    # "A equipe toda veio, o Carlos foi demitido": quem sai nesta mensagem não entra no ponto dela.
+    for item in bruto_acoes or []:
+        if isinstance(item, dict) and item.get("tipo") == "editar_funcionario":
+            dados = _juntar_dados(item, "editar_funcionario")
+            if _desliga(dados):
+                try:
+                    ctx.desligados.add(_funcionario(dados, ctx)["id"])
+                except Pular:
+                    pass
     for item in bruto_acoes or []:
         if not isinstance(item, dict):
             continue

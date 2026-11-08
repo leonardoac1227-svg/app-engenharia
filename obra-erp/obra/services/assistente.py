@@ -167,6 +167,17 @@ PONTO
   fugiu da regra ("menos o Carlos, que faltou") vai em registros com as horas dele.
 - Nome parecido com o de alguém da equipe é essa pessoa: o áudio costuma errar a grafia.
 
+EQUIPE
+- "Foi demitido", "mandei embora", "pediu as contas", "saiu da obra", "não trabalha mais": editar_funcionario
+  com alteracoes.ativo = false. Ele sai das listas da obra e o histórico de ponto continua.
+  Quem saiu fica fora de "equipe inteira". Só registre ponto para ele se a fala disser que trabalhou
+  naquele dia ("trabalhou de manhã e foi mandado embora").
+- "Voltou", "foi readmitido": editar_funcionario com alteracoes.ativo = true.
+- Pessoa nova citada com função ("entrou o Marcos, armador"): funcionario. Mudou função, telefone ou PIX:
+  editar_funcionario só com o que mudou.
+- Exemplo: "o efetivo todo compareceu hoje, o Carlos foi demitido" → editar_funcionario {nome "Carlos",
+  alteracoes {ativo false}} + ponto {equipe_inteira true}.
+
 FOTOS
 - Imagens da obra (não documentos) viram "foto" no dia indicado ("relatório fotográfico de ontem").
 

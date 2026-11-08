@@ -369,5 +369,53 @@ with app.app_context():
     x = um('SELECT pagar_em FROM despesas WHERE id = ?', (segunda_parcela['id'],))
 ok(x['pagar_em'] == SEXTA_ANTES.isoformat(), 'mudar o vencimento move junto o dia de pagamento', dict(x))
 
+print('== EQUIPE: DEMITIDO SAI DA LISTA E DO PONTO ==')
+pessoa = lambda nome: c.post(f'/api/obras/{O13}/funcionarios', json={'nome': nome, 'funcao': 'Servente'}, headers=H).get_json()['id']
+JOSE, CARLOS, PEDRO = pessoa('José Lima'), pessoa('Carlos Dias'), pessoa('Pedro Reis')
+
+def ativos_o13():
+    with app.app_context():
+        from obra.db import todos
+        return {r['nome'] for r in todos('SELECT nome FROM funcionarios WHERE obra_id = ? AND ativo = 1', (O13,))}
+
+def ponto_hoje_o13():
+    with app.app_context():
+        from obra.db import todos
+        return {r['nome']: r['horas_trabalhadas'] for r in todos(
+            """SELECT f.nome, h.horas_trabalhadas FROM horas h JOIN funcionarios f ON f.id = h.funcionario_id
+                 JOIN dias d ON d.id = h.dia_id JOIN semanas s ON s.id = d.semana_id
+                WHERE s.obra_id = ? AND d.data = ?""", (O13, hoje_iso()))}
+
+transcricoes[:] = ['O efetivo todo compareceu hoje no O13, o Carlos foi demitido.']
+fila_ia[:] = [{'obra_id': O13, 'resposta': 'Feito.', 'acoes': [
+    {'tipo': 'ponto', 'dados': {'equipe_inteira': True}},
+    {'tipo': 'editar_funcionario', 'dados': {'nome': 'Carlos', 'alteracoes': {'ativo': False}}}]}]
+entregar({'voice': {'file_id': 'v', 'mime_type': 'audio/ogg'}})
+ok('Carlos Dias' not in ativos_o13() and {'José Lima', 'Pedro Reis'} <= ativos_o13(),
+   'demitido sai da lista da obra', ativos_o13())
+p = ponto_hoje_o13()
+ok(p.get('José Lima') == 8 and p.get('Pedro Reis') == 8 and 'Carlos Dias' not in p,
+   'efetivo todo com 8h, sem o demitido', p)
+ok('desligado da equipe' in enviadas[-1]['text'], 'o bot confirma o desligamento', enviadas[-1]['text'])
+with app.app_context():
+    from obra.db import um
+    ok(um('SELECT id FROM funcionarios WHERE id = ?', (CARLOS,)) is not None, 'o cadastro e o histórico continuam')
+
+fila_ia[:] = [{'obra_id': O13, 'resposta': 'Feito.', 'acoes': [
+    {'tipo': 'editar_funcionario', 'dados': {'nome': 'Carlos', 'alteracoes': {'ativo': True}}}]}]
+entregar({'text': 'o Carlos voltou para o O13'})
+ok('Carlos Dias' in ativos_o13(), 'readmitido volta para a lista', ativos_o13())
+
+transcricoes[:] = ['O José trabalhou de manhã e foi mandado embora.']
+fila_ia[:] = [{'obra_id': O13, 'resposta': 'Feito.', 'acoes': [
+    {'tipo': 'ponto', 'dados': {'registros': [{'nome': 'José', 'horas': 4, 'justificativa': 'demitido à tarde'}]}},
+    {'tipo': 'editar_funcionario', 'dados': {'nome': 'José', 'alteracoes': {'ativo': False}}}]}]
+entregar({'voice': {'file_id': 'v', 'mime_type': 'audio/ogg'}})
+ok(ponto_hoje_o13().get('José Lima') == 4 and 'José Lima' not in ativos_o13(),
+   'quem trabalhou antes de sair fica com as horas citadas e sai da lista', (ponto_hoje_o13(), ativos_o13()))
+
+with app.app_context():
+    ok('pediu as contas' in pedidos[-1]['sistema'], 'a IA conhece as falas de demissão')
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)
