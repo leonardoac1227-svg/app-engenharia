@@ -16,6 +16,7 @@ uma função nova à IA, basta acrescentar uma entrada no CATALOGO.
 
 from __future__ import annotations
 
+import json
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
@@ -361,6 +362,17 @@ _registrar(TipoAcao(
 
 # ---------------------------------------------------------------- despesas
 
+def _parcelas_da_nota(bruto) -> list[dict]:
+    lista = []
+    for item in bruto if isinstance(bruto, list) else []:
+        if not isinstance(item, dict):
+            continue
+        vencimento, parcela = data_ou(item.get("vencimento"), ""), valor(item.get("valor"))
+        if vencimento and parcela:
+            lista.append({"vencimento": vencimento, "valor": parcela})
+    return sorted(lista, key=lambda p: p["vencimento"])[:36]
+
+
 def _n_despesa(d, ctx):
     d = completar(d, ctx.obra_nome)
     status = status_pagamento(d.get("status_pagamento")) or "Em Aberto"
@@ -381,6 +393,10 @@ def _n_despesa(d, ctx):
         "parcela_frequencia": frequencia if frequencia in FREQ_PARCELA else "mensal",
         "anexos": indices(d.get("anexos"), ctx.arquivos),
     }
+    lista = _parcelas_da_nota(d.get("parcelas_lista"))
+    if lista:
+        # Datas e valores impressos na nota valem mais que dividir por intervalo.
+        saida.update(parcelas_lista=lista, parcelas=0, valor=round(sum(p["valor"] for p in lista), 2))
     viagens = inteiro(d.get("frete_viagens"))
     if saida["categoria"] == "Frete" and texto(d.get("frete_transportador"), 120) and viagens > 1:
         datas = [data_ou(x, saida["data"]) for x in (d.get("frete_datas") or [])][:viagens]
@@ -403,7 +419,9 @@ def _e_despesa(ex, d, arq):
         raise ex.Erro("Faltam descrição ou valor.", "faltando")
     dados = {k: str(d[k]) for k in ("categoria", "descricao", "fornecedor", "valor", "status_pagamento",
                                      "numero_nota", "vencimento", "reembolsar_para") if d.get(k)}
-    if d.get("parcelas"):
+    if d.get("parcelas_lista"):
+        dados["parcelas_lista"] = json.dumps(d["parcelas_lista"])
+    elif d.get("parcelas"):
         dados.update(parcelas=str(d["parcelas"]), parcela_frequencia=d["parcela_frequencia"])
     if d.get("frete_viagens"):
         dados.update(frete_transportador=d["frete_transportador"], frete_viagens=str(d["frete_viagens"]),
@@ -424,6 +442,9 @@ def _d_despesa(d):
         if d.get(chave):
             partes.append(prefixo + d[chave])
     partes.append(d.get("status_pagamento", ""))
+    if d.get("parcelas_lista"):
+        partes.append(f"{len(d['parcelas_lista'])} vencimento(s): " + ", ".join(
+            f"{data_br(p['vencimento'])} {moeda(p['valor'])}" for p in d["parcelas_lista"]))
     if d.get("parcelas"):
         partes.append(f"{d['parcelas']}x {d['parcela_frequencia']}")
     if d.get("frete_viagens"):
@@ -439,8 +460,9 @@ _registrar(TipoAcao(
     "despesa", "Despesa",
     "data, categoria (uma de \"categorias\"), descricao (itens com quantidade + o que o usuário disse), "
     "fornecedor, valor (TOTAL final), status_pagamento (Pago | Em Aberto | Reembolso), numero_nota, "
-    "vencimento, reembolsar_para, anexos (índices dos comprovantes), parcelas + parcela_frequencia "
-    "(nota parcelada; valor = total), frete_transportador + frete_viagens + frete_datas (frete com várias "
+    "vencimento, reembolsar_para, anexos (índices dos comprovantes), parcelas_lista [{vencimento, valor}] "
+    "(cada vencimento impresso na nota a prazo, na ordem), parcelas + parcela_frequencia "
+    "(parcelado sem datas impressas; valor = total), frete_transportador + frete_viagens + frete_datas (frete com várias "
     "viagens; valor = de CADA viagem), locacao_frequencia (diaria|semanal|quinzenal|mensal) + "
     "locacao_ciclos + equipamento (aluguel recorrente)",
     _n_despesa, _e_despesa, _d_despesa, permissao="financeiro",
@@ -741,6 +763,8 @@ ESQUEMA_DADOS = {
         "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},
         "frete_datas": {"type": "array", "items": _S},
+        "parcelas_lista": {"type": "array", "items": {"type": "object", "properties": {
+            "vencimento": _S, "valor": _N}}},
         "registros": {"type": "array", "items": {"type": "object", "properties": {
             "funcionario_id": _I, "nome": _S, "horas": _N, "justificativa": _S}}},
         "alteracoes": {"type": "object", "properties": _ALTERACOES},

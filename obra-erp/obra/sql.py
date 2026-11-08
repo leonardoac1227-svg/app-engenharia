@@ -199,6 +199,7 @@ CREATE TABLE IF NOT EXISTS despesas (
     grupo_tipo TEXT DEFAULT 'parcela',
     parcela_numero INTEGER DEFAULT 0,
     parcela_total INTEGER DEFAULT 0,
+    vence_na_semana INTEGER DEFAULT 0,
     vencimento TEXT,
     pago_em TEXT,
     imagem_path TEXT DEFAULT '',

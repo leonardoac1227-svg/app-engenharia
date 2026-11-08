@@ -101,6 +101,7 @@ FORNECEDORES = (
     (r"alta tensao\b.*", "Alta tensão"),
     (r"petrotintas\b.*", "Petrotintas"),
     (r"feira tintas\b.*", "Feira Tintas"),
+    (r"marcon\b.*", "Marcon"),
 )
 
 _NUMERO_NA_DESCRICAO = re.compile(
@@ -207,9 +208,16 @@ EXEMPLOS = (
      'três ações despesa, cada uma "Caixa de entulho", SOS Entulho, 1, Em Aberto'),
     ('"Mandei 8 sacos de cimento do I19 pro T21"',
      'despesa na obra T21: "8 sacos de cimento vindo do I19", sem fornecedor, 1, Em Aberto'),
-    ('"Nota da Central em 3 vezes, materiais hidráulicos da piscina" + nota',
+    ('"Nota da Central em 3 vezes, materiais hidráulicos da piscina" + nota sem quadro de parcelas',
      'despesa: "Materiais hidráulicos para piscina", "Central da construção", valor = TOTAL da nota, '
      'parcelas 3, parcela_frequencia mensal, Em Aberto'),
+    ('"Nota da Marcon parcelada, registros e tubos pra hidráulica do I19" + NF com quadro PARCELAS '
+     '(001 21/11/2026 R$ 150,00; 002 21/12/2026 R$ 139,00)',
+     'despesa: "Registros e tubos para hidráulica", fornecedor "Marcon", numero_nota "343245", valor 289.00, '
+     'Em Aberto, parcelas_lista [{vencimento 2026-11-21, valor 150.00}, {vencimento 2026-12-21, valor 139.00}], '
+     'anexos [0]'),
+    ('"Nota a prazo da Marcon" + NF com uma parcela só (001 21/11/2026 R$ 289,00)',
+     'despesa: valor 289.00, Em Aberto, parcelas_lista [{vencimento 2026-11-21, valor 289.00}]'),
     ('"Conta da internet de outubro, 79,90, em aberto" + boleto',
      'despesa: "Conta da internet referente ao mês de outubro", fornecedor do boleto, 79.90, Em Aberto, '
      'categoria Serviço, vencimento do boleto'),

@@ -336,6 +336,13 @@ vira a primeira parcela.
   saiu e apagar faria o caixa mentir.
 - A trava de nota duplicada não acusa as parcelas da mesma nota.
 
+**Vencimentos impressos na nota.** Pelo assistente ou pelo bot, basta dizer que
+a nota é parcelada ou a prazo: a IA lê o quadro PARCELAS/DUPLICATAS/FATURA e
+cria cada parcela com a data e o valor impressos (uma duplicata só também
+vale). Nesse caso a 1ª parcela também vai para a semana do seu vencimento
+(`vence_na_semana`); semana ainda não criada deixa a parcela agendada até ela
+nascer. Sem falar em parcela, a nota entra hoje e guarda só o 1º vencimento.
+
 **Por que aqui as parcelas nascem todas de uma vez, diferente da locação.**
 Aluguel pode ser interrompido (devolveu o andaime, para de pagar), então lá a
 renovação só vira conta quando o gestor confirma. Nota parcelada já é dívida

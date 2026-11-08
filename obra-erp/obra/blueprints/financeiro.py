@@ -148,6 +148,10 @@ def criar(dia_id: int):
     if len(uploads) > anexos_despesa.LIMITE_POR_LANCAMENTO:
         raise ApiErro(f"Cada lançamento aceita até {anexos_despesa.LIMITE_POR_LANCAMENTO} anexos.")
 
+    # Conferidos antes de gravar: um parcelamento inválido não pode deixar a nota pela metade.
+    frete = validar_frete(request.form) if categoria == "Frete" else None
+    parcelamento = None if frete else validar_parcelamento(request.form)
+
     cur = executar(
         """INSERT INTO despesas (dia_id, categoria, descricao, fornecedor, valor,
                                  status_pagamento, numero_nota, vencimento, pago_em, imagem_path,
@@ -160,13 +164,11 @@ def criar(dia_id: int):
     gravados = anexos_despesa.adicionar(cur.lastrowid, uploads)
     registrar_auditoria(usuario, "lancou_despesa", "despesa", cur.lastrowid,
                         f"{descricao} · {valor:.2f} · {status}")
-    frete = validar_frete(request.form) if categoria == "Frete" else None
     if frete:
         resposta_frete = gerar_fretes(cur.lastrowid, obra_id, frete, usuario["id"])
         registrar_auditoria(usuario, "lancou_frete", "despesa", cur.lastrowid,
                             f"{frete['transportador']} · {frete['viagens']} viagem(ns)")
 
-    parcelamento = None if frete else validar_parcelamento(request.form)
     if parcelamento:
         resposta_parcelas = gerar_parcelas(cur.lastrowid, obra_id, parcelamento, usuario["id"])
         registrar_auditoria(usuario, "parcelou_nota", "despesa", cur.lastrowid,

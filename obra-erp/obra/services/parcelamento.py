@@ -16,16 +16,23 @@ porque o material já foi entregue.
 As parcelas ficam ligadas por um `grupo_parcela`, o que permite mostrar "2/5"
 na lista e apagar o parcelamento inteiro de uma vez.
 
-Cada parcela pertence à semana do seu vencimento. Quando essa semana ainda
-não foi criada, a parcela fica "agendada": guardada no dia do lançamento,
-mas fora das contas e relatórios daquela semana (ver `sql_fora_da_semana`).
-Ela continua visível em Contas a pagar, que olha o vencimento, e é movida
-para o dia certo quando a semana do vencimento é criada
-(`alocar_parcelas_agendadas`).
+Cada parcela pertence à semana do seu vencimento. A primeira é a própria nota e
+fica no dia do lançamento, exceto quando os vencimentos vieram impressos na
+nota (`vence_na_semana`): aí ela também vai para a semana dela. Quando essa semana ainda não foi
+criada, a parcela fica "agendada": guardada no dia do lançamento, mas fora
+das contas e relatórios daquela semana (ver `sql_fora_da_semana`). Ela
+continua visível em Contas a pagar, que olha o vencimento, e é movida para o
+dia certo quando a semana do vencimento é criada (`alocar_parcelas_agendadas`).
+
+Os vencimentos saem de duas formas: um intervalo fixo (mensal, quinzenal...)
+com o total dividido em partes iguais, ou a lista impressa na nota
+(`parcelas_lista`: quadro de duplicatas/fatura), com a data e o valor de cada
+uma — inclusive uma duplicata só, de venda a prazo.
 """
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import date, timedelta
 
@@ -78,13 +85,14 @@ def dividir_valor(total: float, parcelas: int) -> list[float]:
 def sql_fora_da_semana(despesa: str = "x", dia: str = "d") -> str:
     """Condição SQL: parcela agendada para depois da semana em que está guardada.
 
-    Vale só da 2ª parcela em diante — a 1ª é a própria nota lançada e fica na
-    semana do lançamento. Os COALESCE evitam que um NULL esconda uma despesa
-    comum. Exige `despesa` ligada a `dia` (tabela `dias`) na consulta.
+    Vale da 2ª parcela em diante — a 1ª é a própria nota e fica na semana do
+    lançamento, salvo quando marcada com `vence_na_semana`. Os COALESCE evitam que um NULL esconda
+    uma despesa comum. Exige `despesa` ligada a `dia` (tabela `dias`) na consulta.
     """
     return (
         f"(COALESCE({despesa}.grupo_tipo, 'parcela') = 'parcela'"
-        f" AND COALESCE({despesa}.parcela_numero, 0) > 1"
+        f" AND (COALESCE({despesa}.parcela_numero, 0) > 1"
+        f" OR (COALESCE({despesa}.parcela_numero, 0) = 1 AND COALESCE({despesa}.vence_na_semana, 0) = 1))"
         f" AND COALESCE({despesa}.vencimento, '') > COALESCE("
         f"(SELECT MAX(dfim.data) FROM dias dfim WHERE dfim.semana_id = {dia}.semana_id),"
         f" '9999-12-31'))"
@@ -114,7 +122,8 @@ def alocar_parcelas_agendadas(obra_id: int | None = None) -> int:
              JOIN semanas s ON s.id = d.semana_id
              JOIN semanas s2 ON s2.obra_id = s.obra_id
              JOIN dias alvo ON alvo.semana_id = s2.id AND alvo.data = x.vencimento
-            WHERE {filtro_obra} AND x.grupo_tipo = 'parcela' AND x.parcela_numero > 1
+            WHERE {filtro_obra} AND x.grupo_tipo = 'parcela'
+              AND (x.parcela_numero > 1 OR (x.parcela_numero = 1 AND x.vence_na_semana = 1))
               AND alvo.id <> x.dia_id""".format(filtro_obra=filtro_obra),
         (obra_id,) if obra_id is not None else ())
     for linha in mudancas:
@@ -122,8 +131,35 @@ def alocar_parcelas_agendadas(obra_id: int | None = None) -> int:
     return len(mudancas)
 
 
-def validar(dados: dict) -> tuple[int, str, int] | None:
+def ler_lista(bruto) -> list[dict]:
+    """Vencimentos impressos na nota: [{"vencimento": "AAAA-MM-DD", "valor": 100.0}, ...]."""
+    if isinstance(bruto, str):
+        try:
+            bruto = json.loads(bruto) if bruto.strip() else []
+        except ValueError:
+            raise ApiErro("Lista de parcelas ilegível.")
+    if not isinstance(bruto, list) or not bruto:
+        return []
+    if len(bruto) > MAXIMO_PARCELAS:
+        raise ApiErro(f"Parcelamento aceita até {MAXIMO_PARCELAS} parcelas.")
+    lista = []
+    for i, item in enumerate(bruto, 1):
+        if not isinstance(item, dict):
+            raise ApiErro("Lista de parcelas ilegível.")
+        vencimento = data_iso(item.get("vencimento"), None, f"o vencimento da parcela {i}")
+        if not vencimento:
+            raise ApiErro(f"Falta o vencimento da parcela {i}.")
+        lista.append({"vencimento": vencimento,
+                      "valor": numero(item.get("valor"), 0, 0.01, campo=f"o valor da parcela {i}")})
+    return sorted(lista, key=lambda p: p["vencimento"])
+
+
+def validar(dados: dict) -> tuple | None:
     """Lê os campos de parcelamento. Devolve None quando não há parcelamento."""
+    lista = ler_lista(dados.get("parcelas_lista"))
+    if lista:
+        return len(lista), "lista", 0, lista
+
     bruto = dados.get("parcelas")
     if not bruto or str(bruto).strip() in ("", "0", "1"):
         return None
@@ -145,42 +181,55 @@ def validar(dados: dict) -> tuple[int, str, int] | None:
     return parcelas, frequencia, intervalo
 
 
-def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, str, int],
+def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple,
                    usuario_id: int | None = None) -> dict:
     """Converte uma despesa recém-lançada na 1ª parcela e cria as demais.
 
-    O valor informado é sempre o **total da nota**: ele é dividido, e a despesa
-    original passa a valer a primeira parcela.
+    Por intervalo, o valor informado é o **total da nota**: ele é dividido, e a
+    despesa original passa a valer a primeira parcela. Pela lista da nota, cada
+    parcela tem a data e o valor impressos, e o total é a soma deles.
     """
-    parcelas, frequencia, intervalo = config_parcelas
+    parcelas, frequencia, intervalo, *resto = config_parcelas
+    lista = resto[0] if resto else None
 
     despesa = um("SELECT * FROM despesas WHERE id = ?", (despesa_id,))
     if not despesa:
         raise ApiErro("Despesa não encontrada.", 404)
 
-    total = float(despesa["valor"] or 0)
-    valores = dividir_valor(total, parcelas)
+    if lista:
+        valores = [p["valor"] for p in lista]
+        vencimentos = [date.fromisoformat(p["vencimento"]) for p in lista]
+        total = round(sum(valores), 2)
+    else:
+        total = float(despesa["valor"] or 0)
+        valores = dividir_valor(total, parcelas)
+        primeiro_vencimento = despesa["vencimento"] or data_iso(None, None) or agora_iso()[:10]
+        inicio = date.fromisoformat(str(primeiro_vencimento)[:10])
+        vencimentos = [_proxima_data(inicio, frequencia, i, intervalo) for i in range(parcelas)]
+    inicio = vencimentos[0]
     grupo = uuid.uuid4().hex
-
-    primeiro_vencimento = despesa["vencimento"] or data_iso(None, None) or agora_iso()[:10]
-    inicio = date.fromisoformat(str(primeiro_vencimento)[:10])
     descricao_base = despesa["descricao"] or ""
+
+    def rotulo(n: int) -> str:
+        # Duplicata única de venda a prazo não é "parcela 1 de 1" para quem lê.
+        return descricao_base if parcelas == 1 else f"{descricao_base} ({n}/{parcelas})"
     # Todas as parcelas apontam para os mesmos arquivos da nota.
     anexos = todos("SELECT arquivo, nome_original, tamanho FROM despesa_anexos "
                    "WHERE despesa_id = ? ORDER BY id", (despesa_id,))
 
     executar(
         """UPDATE despesas SET valor = ?, descricao = ?, vencimento = ?,
-                               grupo_parcela = ?, parcela_numero = 1, parcela_total = ?
+                               grupo_parcela = ?, parcela_numero = 1, parcela_total = ?,
+                               vence_na_semana = ?
             WHERE id = ?""",
-        (valores[0], f"{descricao_base} (1/{parcelas})", inicio.isoformat(),
-         grupo, parcelas, despesa_id))
+        (valores[0], rotulo(1), inicio.isoformat(),
+         grupo, parcelas, 1 if lista else 0, despesa_id))
 
     criadas = [{"id": despesa_id, "numero": 1, "valor": valores[0],
                 "vencimento": inicio.isoformat()}]
 
     for indice in range(1, parcelas):
-        vencimento = _proxima_data(inicio, frequencia, indice, intervalo)
+        vencimento = vencimentos[indice]
         # Sem a semana do vencimento, a parcela fica agendada no dia do lançamento.
         dia_id = _dia_do_vencimento(obra_id, vencimento.isoformat()) or despesa["dia_id"]
 
@@ -191,7 +240,7 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, st
                                      criado_por, criado_em)
                VALUES (?, ?, ?, ?, ?, ?, 'Em Aberto', ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (dia_id, despesa["etapa_id"], despesa["categoria"],
-             f"{descricao_base} ({indice + 1}/{parcelas})", despesa["fornecedor"],
+             rotulo(indice + 1), despesa["fornecedor"],
              valores[indice], despesa["numero_nota"], grupo, indice + 1, parcelas,
              vencimento.isoformat(), despesa["imagem_path"], despesa["nome_arquivo"],
              usuario_id, agora_iso()))
@@ -201,6 +250,9 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple[int, st
 
         criadas.append({"id": cur.lastrowid, "numero": indice + 1,
                         "valor": valores[indice], "vencimento": vencimento.isoformat()})
+
+    # Com vencimentos da nota, a 1ª parcela também vai para a semana dela, se já existir.
+    alocar_parcelas_agendadas(obra_id)
 
     return {
         "grupo": grupo,

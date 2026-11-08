@@ -274,5 +274,64 @@ with app.app_context():
        'a IA recebe os exemplos do jeito da empresa')
     ok('Nunca deduza "Pago"' in pedidos[-1]['sistema'], 'a regra antiga de "Pago" pelo cupom saiu')
 
+print('== NOTA A PRAZO: CADA VENCIMENTO NA SUA SEMANA ==')
+from datetime import date, timedelta
+from obra.services.semanas import garantir_semanas_em_dia
+HOJE = date.fromisoformat(hoje_iso())
+V1, V2 = (HOJE + timedelta(days=15)).isoformat(), (HOJE + timedelta(days=45)).isoformat()
+
+def grupo_de(despesa_id):
+    with app.app_context():
+        from obra.db import todos, um
+        grupo = um('SELECT grupo_parcela FROM despesas WHERE id = ?', (despesa_id,))['grupo_parcela']
+        return [dict(r) for r in todos(
+            """SELECT x.id, x.descricao, x.valor, x.vencimento, x.parcela_numero, x.parcela_total, d.data
+                 FROM despesas x JOIN dias d ON d.id = x.dia_id
+                WHERE x.grupo_parcela = ? ORDER BY x.parcela_numero""", (grupo,))] if grupo else []
+
+def semana_atual_tem(despesa_id):
+    semana = next(s for s in c.get(f'/api/obras/{I19}/semanas').get_json() if s['atual'])
+    return any(x['id'] == despesa_id for x in c.get(f"/api/semanas/{semana['id']}/fechamento").get_json()['despesas'])
+
+MARCON = lambda lista: {'obra_id': I19, 'resposta': 'Lançado.', 'acoes': [{'tipo': 'despesa', 'dados': {
+    'descricao': 'Registros e tubos para hidráulica', 'fornecedor': 'MARCON MATERIAIS DE CONSTRUCAO LTDA',
+    'numero_nota': '343245', 'valor': 289, 'status_pagamento': 'Em Aberto', 'parcelas_lista': lista}}]}
+fila_ia[:] = [MARCON([{'vencimento': V2, 'valor': 139}, {'vencimento': V1, 'valor': 150}])]
+entregar({'text': 'Nota da Marcon parcelada, registros e tubos pra hidráulica do I19'})
+ID = ultimo_id()
+g = grupo_de(ID)
+ok([(p['vencimento'], p['valor'], p['parcela_numero']) for p in g] == [(V1, 150, 1), (V2, 139, 2)],
+   'cada parcela com a data e o valor impressos, em ordem', g)
+ok(g[0]['descricao'].endswith('(1/2)') and lancamento(ID)['fornecedor'] == 'Marcon', 'descrição e fornecedor no padrão', g[0])
+ok(not semana_atual_tem(ID), 'a 1ª parcela não conta na semana atual: vence em outra', ID)
+ok('2 vencimento(s)' in enviadas[-1]['text'], 'o bot mostra os vencimentos', enviadas[-1]['text'])
+with app.test_request_context():
+    garantir_semanas_em_dia(HOJE + timedelta(days=16))
+g = grupo_de(ID)
+ok(g[0]['data'] == V1 and g[1]['data'] != V2, 'semana do 1º vencimento criada: a parcela vai para lá', g)
+
+fila_ia[:] = [MARCON([{'vencimento': V1, 'valor': 289}])]
+entregar({'text': 'nota a prazo da Marcon, conexões, I19'})
+g = grupo_de(ultimo_id())
+ok(len(g) == 1 and g[0]['vencimento'] == V1 and g[0]['descricao'] == 'Registros e tubos para hidráulica',
+   'duplicata única: um lançamento no vencimento, sem "(1/1)"', g)
+
+fila_ia[:] = [MARCON([{'vencimento': V1, 'valor': 289}])]
+fila_ia[0]['acoes'][0]['dados']['numero_nota'] = '343246'
+entregar({'text': 'nota da Marcon, conexões, I19'})
+with app.app_context():
+    from obra.db import um
+    x = um('SELECT grupo_parcela, vencimento, valor FROM despesas WHERE id = ?', (ultimo_id(),))
+ok(not x['grupo_parcela'] and x['vencimento'] == V1 and x['valor'] == 289,
+   'sem falar em parcela: lança hoje e guarda só o vencimento', dict(x))
+
+with app.app_context():
+    dia_hoje = um("""SELECT d.id FROM dias d JOIN semanas s ON s.id = d.semana_id
+                      WHERE s.obra_id = ? AND d.data = ?""", (I19, hoje_iso()))['id']
+antes = len(despesas(I19))
+r = c.post(f'/api/dias/{dia_hoje}/despesas', data={'categoria': 'Material', 'descricao': 'X', 'valor': '10',
+           'parcelas_lista': '[{"vencimento": "2026-13-40", "valor": 10}]'}, headers=H, content_type='multipart/form-data')
+ok(r.status_code == 400 and len(despesas(I19)) == antes, 'parcela inválida não deixa a nota gravada pela metade', r.get_json())
+
 print('\n' + ('PADRÕES OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

@@ -40,6 +40,8 @@ _FALA_DE_STATUS = (
     ("Em Aberto", r"\bem aberto\b|\ba pagar\b|\bfaturad\w*|\bnao (foi )?pag[oa]\b|\bfiado\b"),
     ("Pago", r"(?<!nao )(?<!nao foi )\b(ja )?(pago|paga|quitad[oa])\b"),
 )
+_FALA_DE_PARCELA = re.compile(r"\bparcel\w*|\b\d{1,2}\s*x\b|\b\d{1,2} vezes\b|\ba prazo\b|\bvencimentos?\b"
+                              r"|\bduplicatas?\b|\bboletos?\b")
 _REEMBOLSO_PARA = re.compile(r"reembols\w*\s+(?:para|pro|pra|do|da|de|ao)\s+(?:o\s+|a\s+)?([A-Za-zÀ-ÿ]{3,})", re.I)
 _NAO_SAO_NOMES = {"mim", "meu", "minha", "obra", "nota", "loja", "fornecedor", "material", "cupom"}
 
@@ -111,6 +113,12 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
   seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
   Vencimento de boleto ou contrato vai em "vencimento", nunca em "data".
 - Número do documento sempre em numero_nota, nunca na descrição. Recibo: "REC 1191".
+- NOTA A PRAZO / PARCELADA (quando o usuário disser "parcelada", "em 3x", "a prazo", "tem boleto",
+  "vencimentos", "parcelas"): leia o quadro "PARCELAS", "DUPLICATAS" ou "FATURA" do documento e preencha
+  parcelas_lista com cada vencimento e valor exatamente como impressos, na ordem (mesmo que seja uma
+  parcela só). valor = total da nota. Cada parcela entra sozinha na semana do seu vencimento. Sem quadro
+  impresso, use parcelas + parcela_frequencia ditos pelo usuário. Sem o usuário falar em parcela, não
+  preencha parcelas_lista: o primeiro vencimento vai só em "vencimento".
 - Descrição no estilo da empresa: curta, o que foi comprado + para quê. Quantidade quando ajuda; sem marca,
   código, medida técnica de catálogo ou preço. Muitos itens: os 2 ou 3 principais e "materiais diversos".
   Bom: "6kg de pregos para execução de vigas e pilares", "Discos de corte para telas da laje",
@@ -378,6 +386,20 @@ def status_dito(mensagem: str) -> tuple[str, str]:
     return achados[0], quem
 
 
+def _parcelamento_so_se_dito(acoes: list[dict], mensagem: str) -> None:
+    """Toda nota a prazo imprime o quadro de duplicatas, mas a empresa lança a maioria no dia da compra.
+
+    Só com o gestor falando em parcela o lançamento vai para as semanas dos
+    vencimentos; senão o primeiro vencimento fica guardado como "vencimento".
+    """
+    if _FALA_DE_PARCELA.search(catalogo.sem_acento(fala_do_usuario(mensagem))):
+        return
+    for dados in _despesas(acoes):
+        lista = dados.pop("parcelas_lista", None)
+        if isinstance(lista, list) and lista and isinstance(lista[0], dict) and not dados.get("vencimento"):
+            dados["vencimento"] = lista[0].get("vencimento")
+
+
 def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
     status, quem = status_dito(mensagem)
     if not status:
@@ -456,6 +478,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     acoes_brutas = [a for a in (bruto.get("acoes") or []) if isinstance(a, dict)]
     _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
     _aplicar_status_dito(acoes_brutas, mensagem)
+    _parcelamento_so_se_dito(acoes_brutas, mensagem)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:
