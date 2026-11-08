@@ -222,6 +222,31 @@ def listar_auditoria():
     return jsonify([dict(r) for r in rows])
 
 
+@bp.get("/diagnostico/conexoes")
+@login_obrigatorio
+@papel_obrigatorio("gestor")
+def diagnostico_conexoes():
+    """Conexões abertas no Postgres e quem está travando quem (só leitura).
+
+    Uma conexão esquecida no meio de uma transação prende tabelas; quem
+    precisa delas espera sem erro e sem log, e o bot simplesmente não responde.
+    """
+    from ..db import EH_POSTGRES
+    if not EH_POSTGRES:
+        return jsonify({"banco": "sqlite", "conexoes": []})
+    linhas = todos(
+        """SELECT a.pid, a.state, a.wait_event_type, a.wait_event, a.application_name,
+                  CAST(EXTRACT(EPOCH FROM (now() - a.xact_start)) AS INTEGER) AS transacao_s,
+                  CAST(EXTRACT(EPOCH FROM (now() - a.state_change)) AS INTEGER) AS no_estado_s,
+                  pg_blocking_pids(a.pid) AS travado_por, LEFT(a.query, 160) AS consulta
+             FROM pg_stat_activity a
+            WHERE a.datname = current_database() AND a.pid <> pg_backend_pid()
+              AND a.backend_type = 'client backend'
+            ORDER BY a.xact_start NULLS LAST""")
+    return jsonify({"banco": "postgres", "conexoes": [
+        {**dict(l), "travado_por": list(l["travado_por"] or [])} for l in linhas]})
+
+
 @bp.get("/diagnostico")
 @login_obrigatorio
 @papel_obrigatorio("gestor")
