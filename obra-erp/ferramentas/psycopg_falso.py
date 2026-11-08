@@ -36,9 +36,26 @@ class _Cursor:
         self._retorno = None
 
     def execute(self, sql, args=()):
+        # Trava com prazo (SET LOCAL lock_timeout) não existe no SQLite: só some.
+        sql = re.sub(r"^\s*SET LOCAL [^;]*;\s*", "", sql, flags=re.I)
         alto = sql.upper()
         if "ENABLE ROW LEVEL SECURITY" in alto:
             self.rowcount = 0
+            return self
+
+        # pg_class.relrowsecurity: no SQLite nenhuma tabela tem RLS.
+        if "FROM PG_CLASS" in alto:
+            self._retorno = []
+            self.rowcount = 0
+            return self
+
+        # information_schema.columns de todas as tabelas -> PRAGMA de cada uma
+        if "INFORMATION_SCHEMA.COLUMNS" in alto and not args:
+            tabelas = [r[0] for r in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'").fetchall()]
+            self._retorno = [{"table_name": t, "column_name": linha[1]} for t in tabelas
+                             for linha in self._conn.execute(f"PRAGMA table_info({t})").fetchall()]
+            self.rowcount = len(self._retorno)
             return self
 
         # information_schema.columns -> PRAGMA table_info

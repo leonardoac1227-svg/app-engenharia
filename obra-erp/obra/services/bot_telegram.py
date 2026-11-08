@@ -36,7 +36,7 @@ import time
 import uuid
 from datetime import date, datetime, timedelta
 
-from ..db import executar, todos, um
+from ..db import executar, liberar_leitura, todos, um
 from ..utils import ApiErro, agora_iso, data_br, hoje_iso, moeda, numero, segunda_da_semana
 from . import acoes as catalogo
 from . import assistente, ia_provedores, telegram_api
@@ -460,6 +460,7 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
         return
 
     linhas = _arquivos_do_lote(lote)
+    liberar_leitura()   # downloads e IA podem levar minutos: não segura tabelas enquanto isso
     if not ja_avisou:
         telegram_api.enviar(chat_id, "⏳ Analisando" + (f" {len(linhas)} arquivo(s)" if linhas else "") + "...")
     telegram_api.digitando(chat_id)

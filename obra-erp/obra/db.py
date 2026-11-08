@@ -711,6 +711,20 @@ def migrar() -> None:
     _migrar_sqlite()
 
 
+_SEM_ESPERAR = "SET LOCAL lock_timeout = '5s';\n"
+
+
+def liberar_leitura() -> None:
+    """Fecha a transação de leitura antes de uma espera longa (IA, Telegram).
+
+    No Postgres, um SELECT deixa a transação aberta até o commit ou rollback,
+    segurando as tabelas lidas. Antes de esperar a IA por até dois minutos,
+    o bot devolve essas tabelas. Tudo que grava já faz commit na hora.
+    """
+    if "db" in g:
+        g.db.rollback()
+
+
 def _migrar_postgres() -> None:
     """Schema no Postgres do Supabase.
 
@@ -720,8 +734,23 @@ def _migrar_postgres() -> None:
     """
     conexao = _conectar_postgres()
     try:
+        # Alterar tabela pede trava exclusiva: com uma conexão do app usando a
+        # tabela, o comando espera e tudo que chega depois entra na fila atrás
+        # dele. Era assim que o deploy não subia e o bot parava de responder.
+        # Por isso só se altera o que falta, e nunca se espera mais que isto.
+        try:
+            with conexao.cursor() as cur:
+                cur.execute(_SEM_ESPERAR + SCHEMA_POSTGRES)
+            conexao.commit()
+        except Exception as erro:  # noqa: BLE001 — banco existente: as tabelas já estão lá
+            conexao.rollback()
+            log.warning("Schema não conferido agora (tabela em uso): %s", erro)
+
         with conexao.cursor() as cur:
-            cur.execute(SCHEMA_POSTGRES)
+            cur.execute("""SELECT table_name, column_name FROM information_schema.columns
+                            WHERE table_schema = current_schema()""")
+            existentes = {(l["table_name"], l["column_name"]) if isinstance(l, dict) else (l[0], l[1])
+                          for l in cur.fetchall()}
         conexao.commit()
 
         # Colunas novas em tabelas que já existem.
@@ -733,10 +762,11 @@ def _migrar_postgres() -> None:
         # permissão, por exemplo) não pode abortar a transação e derrubar os
         # seguintes.
         faltando = []
-        for comando in alteracoes_postgres(COLUNAS_EXTRAS):
+        novas = [c for c in COLUNAS_EXTRAS if (c[0], c[1]) not in existentes]
+        for comando in alteracoes_postgres(novas):
             try:
                 with conexao.cursor() as cur:
-                    cur.execute(comando)
+                    cur.execute(_SEM_ESPERAR + comando)
                 conexao.commit()
             except Exception as erro:  # noqa: BLE001
                 conexao.rollback()
@@ -748,7 +778,7 @@ def _migrar_postgres() -> None:
 
         try:
             with conexao.cursor() as cur:
-                cur.execute(COPIAR_ANEXOS_ANTIGOS)
+                cur.execute(_SEM_ESPERAR + COPIAR_ANEXOS_ANTIGOS)
             conexao.commit()
         except Exception as erro:  # noqa: BLE001
             conexao.rollback()
@@ -758,8 +788,15 @@ def _migrar_postgres() -> None:
         # não ser permitido, e isso não deve impedir o app de subir.
         try:
             with conexao.cursor() as cur:
-                cur.execute(RLS_POSTGRES)
+                cur.execute("SELECT relname FROM pg_class WHERE relkind = 'r' AND relrowsecurity")
+                com_rls = {l["relname"] if isinstance(l, dict) else l[0] for l in cur.fetchall()}
             conexao.commit()
+            pendentes = [linha for linha in RLS_POSTGRES.strip().splitlines()
+                         if linha.split()[2] not in com_rls]
+            if pendentes:
+                with conexao.cursor() as cur:
+                    cur.execute(_SEM_ESPERAR + "\n".join(pendentes))
+                conexao.commit()
         except Exception:
             conexao.rollback()
 

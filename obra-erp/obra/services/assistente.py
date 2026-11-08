@@ -24,7 +24,7 @@ import re
 import time
 
 from .. import config
-from ..db import todos, um
+from ..db import liberar_leitura, todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
 from . import ia_provedores, padroes
@@ -339,6 +339,7 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
     if not audios:
         return ""
     nomes = [o["nome"] for o in obras] + [n for equipe in _equipes(obras).values() for n in equipe]
+    liberar_leitura()
     bruto, _ = ia_provedores.gerar(
         PROMPT_TRANSCRICAO.replace("{nomes}", ", ".join(dict.fromkeys(nomes))),
         "Transcreva os áudios.", audios, None, max_tokens=4096, pensar="minimo", prazo=prazo)
@@ -486,8 +487,10 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
                          .replace("{exemplos}", padroes.exemplos_para_prompt(pode_financeiro)) \
                          .replace("{{", "{").replace("}}", "}")
 
+    pedido = _texto_pedido(mensagem, contexto, arquivos, historico)
+    liberar_leitura()
     bruto, fonte = ia_provedores.gerar(
-        sistema, _texto_pedido(mensagem, contexto, arquivos, historico),
+        sistema, pedido,
         [a for a in arquivos if not eh_audio(a)], ESQUEMA,
         max_tokens=8192, pensar="baixo", prazo=prazo - (time.monotonic() - inicio))
     bruto = bruto if isinstance(bruto, dict) else {}
