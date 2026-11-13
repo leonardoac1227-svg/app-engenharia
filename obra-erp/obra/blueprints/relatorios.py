@@ -173,24 +173,50 @@ def listar_arquivos_semana(semana_id: int):
 @bp.get("/semanas/<int:semana_id>/arquivos.zip")
 @login_obrigatorio
 def baixar_arquivos_semana(semana_id: int):
-    """Todos os anexos da semana num pacote, com nomes legíveis."""
-    from ..services.arquivos_semana import gerar_zip
+    """Todos os anexos da semana num pacote, com nomes legíveis.
+
+    Por padrão o pacote junta **todas as obras** que têm semana no mesmo período,
+    cada uma na sua pasta, dentro de uma pasta-mãe com a maior semana entre elas
+    (igual à planilha de pagamento). Com `?obra=1`, sai só a obra pedida.
+    """
+    from ..db import todos
+    from ..security import obras_permitidas
+    from ..services.arquivos_semana import gerar_zip, gerar_zip_obras
     from ..utils import ApiErro, bytes_anexo, slug
 
     if usuario_atual()["papel"] != "gestor":
         raise ApiErro("Somente o gestor baixa o pacote de anexos.", 403)
 
-    obra_da_semana(semana_id)
+    obra_id = obra_da_semana(semana_id)
     dados = dados_fechamento(semana_id)
-    conteudo, resumo = gerar_zip(semana_id, dados, bytes_anexo)
 
-    if not resumo["total"]:
-        raise ApiErro("Esta semana ainda não tem nenhum arquivo anexado.", 404)
+    semanas = [(semana_id, dados)]
+    if request.args.get("obra") != "1":
+        permitidas = obras_permitidas()
+        for irma in todos(
+                """SELECT s.id AS semana_id, o.id AS obra_id
+                     FROM semanas s JOIN obras o ON o.id = s.obra_id
+                    WHERE s.data_inicio = ? AND s.obra_id != ? AND o.arquivada = 0
+                    ORDER BY o.nome""",
+                (dados["data_inicio"], obra_id)):
+            if permitidas is not None and irma["obra_id"] not in permitidas:
+                continue
+            semanas.append((irma["semana_id"], dados_fechamento(irma["semana_id"])))
 
-    registrar_auditoria(usuario_atual(), "baixou_arquivos", "semana", semana_id,
-                        f"{resumo['incluidos']} arquivo(s)")
+    if len(semanas) > 1:
+        conteudo, resumo = gerar_zip_obras(semanas, bytes_anexo)
+        if not resumo["total"]:
+            raise ApiErro("Nenhuma obra tem arquivo anexado nesta semana.", 404)
+        nome = f"{slug(resumo['raiz']).upper()}.zip"
+        detalhe = f"{resumo['incluidos']} arquivo(s) de {resumo['obras']} obra(s)"
+    else:
+        conteudo, resumo = gerar_zip(semana_id, dados, bytes_anexo)
+        if not resumo["total"]:
+            raise ApiErro("Esta semana ainda não tem nenhum arquivo anexado.", 404)
+        nome = (f"ARQUIVOS_{slug(dados['obra_nome']).upper()}"
+                f"_SEMANA_{dados['semana_numero']:02d}.zip")
+        detalhe = f"{resumo['incluidos']} arquivo(s)"
 
-    nome = (f"ARQUIVOS_{slug(dados['obra_nome']).upper()}"
-            f"_SEMANA_{dados['semana_numero']:02d}.zip")
+    registrar_auditoria(usuario_atual(), "baixou_arquivos", "semana", semana_id, detalhe)
     return Response(conteudo, mimetype="application/zip",
                     headers={"Content-Disposition": f'attachment; filename="{nome}"'})

@@ -325,10 +325,12 @@ async function renderizarArquivos(raiz, financeiro) {
 
     ${financeiro ? `
       <button class="btn btn-outline" data-acao="zip" style="margin-top:12px">
-        ⬇ Baixar todos em um .zip (${indice.total})
+        ⬇ Baixar .zip de todas as obras da semana
       </button>
       <p class="small faint" style="margin-top:6px">
-        As notas saem renomeadas com data, número e fornecedor — prontas para enviar ao contador.
+        Uma pasta para cada obra, com notas fiscais e fotos separadas. As notas saem renomeadas
+        com data, número e fornecedor — prontas para enviar ao contador.
+        <a href="#" data-acao="zip-obra">Baixar só desta obra (${indice.total})</a>
       </p>` : ''}
   `;
 
@@ -341,6 +343,14 @@ async function renderizarArquivos(raiz, financeiro) {
     botaoZip.onclick = () => {
       toast('Montando o pacote...');
       baixar(`/api/semanas/${estado.semanaId}/arquivos.zip`);
+    };
+  }
+  const linkObra = alvo.querySelector('[data-acao=zip-obra]');
+  if (linkObra) {
+    linkObra.onclick = (ev) => {
+      ev.preventDefault();
+      toast('Montando o pacote...');
+      baixar(`/api/semanas/${estado.semanaId}/arquivos.zip?obra=1`);
     };
   }
 }

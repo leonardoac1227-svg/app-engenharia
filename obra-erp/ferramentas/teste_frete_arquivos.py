@@ -134,6 +134,40 @@ S2 = c.post(f'/api/obras/{O}/semanas', json={'data_inicio':'2026-08-24'}, header
 ok(c.get(f'/api/semanas/{S2}/arquivos').get_json()['total'] == 0, 'índice vazio não quebra')
 ok(c.get(f'/api/semanas/{S2}/arquivos.zip').status_code == 404, 'ZIP vazio avisa em vez de baixar nada')
 
+print('== PACOTE COM TODAS AS OBRAS ==')
+# Segunda obra no mesmo período, começando antes: a semana dela tem número maior.
+O2 = c.post('/api/obras', json={'nome':'Obra Vizinha'}, headers=H).get_json()['id']
+for inicio in ['2026-08-03', '2026-08-10', '2026-08-17']:
+    S_viz = c.post(f'/api/obras/{O2}/semanas', json={'data_inicio': inicio}, headers=H).get_json()['id']
+num_viz = c.get(f'/api/semanas/{S_viz}/fechamento').get_json()['semana_numero']
+DIA2 = c.get(f'/api/semanas/{S_viz}/dias').get_json()[0]['id']
+c.post(f'/api/dias/{DIA2}/fotos', data={'fotos': (foto(),'laje.jpg'), 'legenda':'Laje'},
+       headers=H, content_type='multipart/form-data')
+c.post(f'/api/dias/{DIA2}/despesas', data={'categoria':'Material','descricao':'Brita',
+    'fornecedor':'PEDREIRA X','valor':'300','status_pagamento':'Pago','numero_nota':'77',
+    'imagem': (pdf('NOTA 77'),'nota-77.pdf')}, headers=H, content_type='multipart/form-data')
+
+r = c.get(f'/api/semanas/{S}/arquivos.zip')
+ok(r.status_code == 200, 'ZIP geral gerado', r.status_code)
+ok('PROJETOS' in r.headers['Content-Disposition'].upper(), 'nome do pacote geral',
+   r.headers['Content-Disposition'])
+nomes = zipfile.ZipFile(io.BytesIO(r.data)).namelist()
+raizes = {n.split('/')[0] for n in nomes}
+ok(len(raizes) == 1, 'tudo dentro de uma pasta só', raizes)
+raiz = raizes.pop()
+ok(f'SEMANA {num_viz:02d}' in raiz, 'pasta-mãe usa a maior semana entre as obras', (raiz, num_viz))
+obras_no_zip = {n.split('/')[1] for n in nomes}
+ok(any(p.startswith('Obra Frete') for p in obras_no_zip) and
+   any(p.startswith('Obra Vizinha') for p in obras_no_zip), 'uma pasta por obra', obras_no_zip)
+ok(any('/Obra Vizinha' in n and '/notas-fiscais/' in n and 'NF-77' in n for n in nomes)
+   and any('/Obra Vizinha' in n and '/fotos/' in n for n in nomes),
+   'cada obra com notas e fotos separadas', nomes)
+mesmo = c.get(f'/api/semanas/{S_viz}/arquivos.zip')
+ok(zipfile.ZipFile(io.BytesIO(mesmo.data)).namelist()[0].split('/')[0] == raiz,
+   'baixando de qualquer obra sai o mesmo pacote')
+so_uma = zipfile.ZipFile(io.BytesIO(c.get(f'/api/semanas/{S}/arquivos.zip?obra=1').data)).namelist()
+ok(any(n.startswith('notas-fiscais/') for n in so_uma), '?obra=1 mantém o pacote de uma obra só', so_uma)
+
 print('== PERMISSÕES ==')
 c.post('/api/usuarios', json={'nome':'Mestre','email':'mf@obra.local','senha':'mestre123',
                               'papel':'mestre','obras':[O]}, headers=H)

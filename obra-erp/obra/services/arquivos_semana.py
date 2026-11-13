@@ -162,3 +162,50 @@ def gerar_zip(semana_id: int, dados_semana: dict, ler_bytes) -> tuple[bytes, dic
         "ausentes": len(ausentes),
         "total": indice["total"],
     }
+
+
+def nome_pasta_geral(semanas: list[dict]) -> str:
+    """Pasta-mãe do pacote: a MAIOR semana entre as obras do período.
+
+    As obras começam em datas diferentes, então a mesma semana do calendário é
+    a 13 numa e a 19 noutra. O pacote leva o número mais alto, seja de qual obra for.
+    """
+    maior = max(int(d.get("semana_numero") or 0) for d in semanas)
+    inicio = data_br(semanas[0].get("data_inicio")).replace("/", "-")
+    fim = data_br(semanas[0].get("data_fim")).replace("/", "-")
+    return _limpo(f"PROJETOS SEMANA {maior:02d} ({inicio} a {fim})", 60)
+
+
+def gerar_zip_obras(semanas: list[tuple[int, dict]], ler_bytes) -> tuple[bytes, dict]:
+    """Um pacote só com todas as obras do período, uma pasta para cada.
+
+    Estrutura: `PROJETOS SEMANA 19 (...)/<OBRA> - SEMANA NN/notas-fiscais|fotos`.
+    Reaproveita o ZIP de cada obra e só muda o prefixo dos caminhos — assim o
+    conteúdo de cada pasta é idêntico ao do download individual.
+    """
+    raiz = nome_pasta_geral([d for _, d in semanas])
+    buffer = io.BytesIO()
+    totais = {"incluidos": 0, "ausentes": 0, "total": 0, "obras": 0}
+    pastas_usadas = set()
+
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as geral:
+        for semana_id, dados in semanas:
+            conteudo, resumo = gerar_zip(semana_id, dados, ler_bytes)
+            if not resumo["total"]:
+                continue
+
+            pasta = _limpo(f"{dados.get('obra_nome', 'Obra')} - SEMANA "
+                           f"{int(dados.get('semana_numero') or 0):02d}", 60)
+            while pasta in pastas_usadas:
+                pasta += "_"
+            pastas_usadas.add(pasta)
+
+            with zipfile.ZipFile(io.BytesIO(conteudo)) as parcial:
+                for nome in parcial.namelist():
+                    geral.writestr(f"{raiz}/{pasta}/{nome}", parcial.read(nome))
+
+            totais["obras"] += 1
+            for chave in ("incluidos", "ausentes", "total"):
+                totais[chave] += resumo[chave]
+
+    return buffer.getvalue(), {**totais, "raiz": raiz}
