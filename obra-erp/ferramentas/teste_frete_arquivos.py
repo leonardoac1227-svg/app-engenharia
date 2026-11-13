@@ -149,13 +149,14 @@ c.post(f'/api/dias/{DIA2}/despesas', data={'categoria':'Material','descricao':'B
 
 r = c.get(f'/api/semanas/{S}/arquivos.zip')
 ok(r.status_code == 200, 'ZIP geral gerado', r.status_code)
-ok('PROJETOS' in r.headers['Content-Disposition'].upper(), 'nome do pacote geral',
+ok(f'ARQUIVOS_DAMA_1_SEMANA_{num_viz:02d}' in r.headers['Content-Disposition'].upper()
+   .replace('-', '_'), 'nome do pacote geral',
    r.headers['Content-Disposition'])
 nomes = zipfile.ZipFile(io.BytesIO(r.data)).namelist()
 raizes = {n.split('/')[0] for n in nomes}
 ok(len(raizes) == 1, 'tudo dentro de uma pasta só', raizes)
 raiz = raizes.pop()
-ok(f'SEMANA {num_viz:02d}' in raiz, 'pasta-mãe usa a maior semana entre as obras', (raiz, num_viz))
+ok(raiz == f'ARQUIVOS DAMA 1 SEMANA {num_viz:02d}', 'pasta-mãe: ARQUIVOS DAMA 1 + maior semana', (raiz, num_viz))
 obras_no_zip = {n.split('/')[1] for n in nomes}
 ok(any(p.startswith('Obra Frete') for p in obras_no_zip) and
    any(p.startswith('Obra Vizinha') for p in obras_no_zip), 'uma pasta por obra', obras_no_zip)

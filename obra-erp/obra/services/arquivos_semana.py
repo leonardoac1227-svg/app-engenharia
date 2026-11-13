@@ -171,15 +171,13 @@ def nome_pasta_geral(semanas: list[dict]) -> str:
     a 13 numa e a 19 noutra. O pacote leva o número mais alto, seja de qual obra for.
     """
     maior = max(int(d.get("semana_numero") or 0) for d in semanas)
-    inicio = data_br(semanas[0].get("data_inicio")).replace("/", "-")
-    fim = data_br(semanas[0].get("data_fim")).replace("/", "-")
-    return _limpo(f"PROJETOS SEMANA {maior:02d} ({inicio} a {fim})", 60)
+    return f"ARQUIVOS DAMA 1 SEMANA {maior:02d}"
 
 
 def gerar_zip_obras(semanas: list[tuple[int, dict]], ler_bytes) -> tuple[bytes, dict]:
     """Um pacote só com todas as obras do período, uma pasta para cada.
 
-    Estrutura: `PROJETOS SEMANA 19 (...)/<OBRA> - SEMANA NN/notas-fiscais|fotos`.
+    Estrutura: `ARQUIVOS DAMA 1 SEMANA 19/<OBRA> - SEMANA NN/notas-fiscais|fotos`.
     Reaproveita o ZIP de cada obra e só muda o prefixo dos caminhos — assim o
     conteúdo de cada pasta é idêntico ao do download individual.
     """
