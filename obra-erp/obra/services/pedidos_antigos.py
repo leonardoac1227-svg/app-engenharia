@@ -61,8 +61,8 @@ def _candidatas() -> list[dict]:
              FROM despesas x
              JOIN despesa_anexos a ON a.despesa_id = x.id
              JOIN dias d ON d.id = x.dia_id
-            WHERE COALESCE(x.numero_nota, '') NOT LIKE 'PED %'
-            ORDER BY x.id DESC, a.id""")
+            WHERE COALESCE(x.numero_nota, '') NOT LIKE ?
+            ORDER BY x.id DESC, a.id""", ("PED %",))  # "%" no texto do SQL quebra o psycopg
     por_despesa: dict[int, dict] = {}
     for linha in linhas:
         extensao = os.path.splitext(str(linha["arquivo"]))[1].lower()
