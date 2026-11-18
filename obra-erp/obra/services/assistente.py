@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import date, timedelta
 import time
 
 from .. import config
@@ -172,6 +173,11 @@ DIÁRIO DE OBRA
 PONTO
 - "Ademir trabalhou o dia inteiro hoje", "Ademir e Ailton vieram": uma ação ponto com um registro por
   pessoa, com jornada_horas, na data dita (sem data, data_referencia).
+- VÁRIOS DIAS: "de segunda a quinta", "todos os dias menos sexta", "segunda, terça e quarta", "a semana
+  toda": UMA AÇÃO PONTO POR DIA citado, todas iguais, cada uma com a sua data (dias da semana de
+  data_referencia). "Todos os dias" / "a semana toda" = segunda a sexta. Nunca lance só o primeiro dia.
+  Ex.: "8 horas para todo o efetivo do I19 de segunda a quinta" → 4 ações ponto {equipe_inteira true,
+  horas 8}, datas de segunda, terça, quarta e quinta.
 - "A equipe inteira", "todo mundo", "a turma toda": equipe_inteira = true, sem listar ninguém. Quem
   fugiu da regra ("menos o Carlos, que faltou") vai em registros com as horas dele.
 - Nome parecido com o de alguém da equipe é essa pessoa: o áudio costuma errar a grafia.
@@ -399,6 +405,72 @@ def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> 
             dados["data"] = referencia
 
 
+# Dias da semana na fala (sem acento). "sengunda" é erro comum de digitação/áudio.
+_DIAS_DA_SEMANA = (r"se?n?gunda", r"terca", r"quarta", r"quinta", r"sexta", r"sabado", r"domingo")
+_DIA = r"(se?n?gunda|terca|quarta|quinta|sexta|sabado|domingo)(?:[\s-]*feira)?"
+_INTERVALO_DE_DIAS = re.compile(rf"\b{_DIA}\s+(?:a|ate|até)\s+(?:a\s+|o\s+)?{_DIA}\b")
+_EXCETO_DIA = re.compile(rf"\b(?:menos|exceto|tirando|fora|sem)\s+(?:a\s+|o\s+|na\s+|no\s+)?{_DIA}\b")
+_SEMANA_TODA = re.compile(r"\b(todos os dias|todo dia|todos dias|a semana toda|semana inteira|"
+                          r"toda a semana|a semana inteira)\b")
+
+
+def _indice_do_dia(nome: str) -> int:
+    return next(i for i, padrao in enumerate(_DIAS_DA_SEMANA) if re.fullmatch(padrao, nome))
+
+
+def dias_ditos(mensagem: str, referencia: str) -> list[str]:
+    """Datas da semana de `referencia` que a fala pede ("de segunda a quinta",
+    "todos os dias menos sexta", "segunda, terça e quarta").
+
+    Só devolve algo quando a fala cita DOIS ou mais dias: um dia só a IA já resolve.
+    "Todos os dias" é a semana de trabalho (segunda a sexta).
+    """
+    fala = catalogo.sem_acento(fala_do_usuario(mensagem)).lower()
+    dias: set[int] = set()
+    for inicio, fim in _INTERVALO_DE_DIAS.findall(fala):
+        a, b = _indice_do_dia(inicio), _indice_do_dia(fim)
+        dias |= set(range(a, b + 1)) if a <= b else set()
+    sem_intervalo = _INTERVALO_DE_DIAS.sub(" ", fala)
+    excetos = {_indice_do_dia(d) for d in _EXCETO_DIA.findall(sem_intervalo)}
+    if _SEMANA_TODA.search(fala):
+        dias |= set(range(0, 5))
+    # Dias soltos ("segunda, terça e quarta"), fora os que são exceção.
+    soltos = {_indice_do_dia(d) for d in re.findall(rf"\b{_DIA}\b", _EXCETO_DIA.sub(" ", sem_intervalo))}
+    if len(soltos) >= 2 or dias:
+        dias |= soltos
+    dias -= excetos
+    if len(dias) < 2:
+        return []
+    segunda = date.fromisoformat(referencia[:10]) - timedelta(days=date.fromisoformat(referencia[:10]).weekday())
+    return [(segunda + timedelta(days=i)).isoformat() for i in sorted(dias)]
+
+
+def _ponto_nos_dias_ditos(acoes: list[dict], mensagem: str, referencia: str) -> None:
+    """"8 horas para o efetivo de segunda a quinta" = um ponto por dia, não só o primeiro.
+
+    A IA às vezes devolve um ponto só (o da segunda, ou o de hoje). Quando a fala
+    cita vários dias e os pontos devolvidos são o mesmo lançamento (mesmas
+    pessoas e horas), o ponto é repetido em cada dia pedido.
+    """
+    dias = dias_ditos(mensagem, referencia)
+    pontos = [a for a in acoes if a.get("tipo") == "ponto" and isinstance(a.get("dados"), dict)]
+    if not dias or not pontos:
+        return
+
+    def sem_data(acao):
+        return json.dumps({k: v for k, v in acao["dados"].items() if k != "data"}, sort_keys=True,
+                          ensure_ascii=False, default=str), acao.get("obra_id")
+
+    if len({sem_data(a) for a in pontos}) != 1:
+        return    # pontos diferentes por dia: a IA já separou, não mexe
+    modelo = pontos[0]
+    posicao = acoes.index(modelo)
+    for acao in pontos:
+        acoes.remove(acao)
+    for i, dia in enumerate(dias):
+        acoes.insert(posicao + i, {**modelo, "dados": {**modelo["dados"], "data": dia}})
+
+
 def status_dito(mensagem: str) -> tuple[str, str]:
     """Status que o usuário falou, onde quer que esteja na mensagem, e para quem é o reembolso.
 
@@ -511,6 +583,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     _aplicar_status_dito(acoes_brutas, mensagem)
     _parcelamento_so_se_dito(acoes_brutas, mensagem)
     _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
+    _ponto_nos_dias_ditos(acoes_brutas, mensagem, referencia)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:
