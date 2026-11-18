@@ -12,12 +12,15 @@ só lista o que mudaria; depois, com `aplicar`, grava.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
 import threading
+import time
 from datetime import datetime
 
+from .. import config
 from ..db import executar, liberar_leitura, registrar_auditoria, todos
 from ..utils import bytes_anexo
 from . import ia_provedores
@@ -39,11 +42,40 @@ Não invente."""
 ESQUEMA = {"type": "object", "properties": {"pedido": {"type": "string"}}}
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
+# O Gemini gratuito aceita poucas leituras por minuto: no ritmo cheio a cota
+# estoura na 20ª nota (HTTP 429). Uma nota a cada PAUSA segundos fica abaixo.
+PAUSA = 7
+ESPERA_COTA = 65             # cota por minuto estourada: espera ela renovar
+TENTATIVAS = 3
+MAX_FALHAS_SEGUIDAS = 4      # depois disso a cota do dia acabou: para e guarda o que já leu
 _trava = threading.Lock()
 _estado: dict = {"rodando": False}
 
 
+def _arquivo() -> str:
+    return os.path.join(config.DATA_DIR, "pedidos_antigos.json")
+
+
+def _salvar() -> None:
+    """Progresso em disco: um reinício do servidor não perde as notas já lidas."""
+    try:
+        with open(_arquivo(), "w", encoding="utf-8") as saida:
+            json.dump(_estado, saida, ensure_ascii=False)
+    except OSError as erro:
+        log.warning("Pedidos: não foi possível salvar o progresso: %s", erro)
+
+
 def estado() -> dict:
+    if not _estado.get("inicio"):
+        try:
+            with open(_arquivo(), encoding="utf-8") as entrada:
+                _estado.update(json.load(entrada))
+        except (OSError, ValueError):
+            pass
+        if _estado.get("rodando"):
+            # Estava rodando quando o servidor reiniciou: a thread morreu junto.
+            _estado.update(rodando=False, falha="Interrompida (o servidor reiniciou). "
+                                                 "Toque em Conferir: continua de onde parou.")
     return dict(_estado)
 
 
@@ -88,24 +120,46 @@ def _ler_pedido(item: dict) -> str:
             arquivos.append({"nome": os.path.basename(nome), "mime": mime, "dados": dados})
     if not arquivos:
         raise ValueError("arquivo da nota não encontrado")
-    resposta, _ = ia_provedores.gerar(SISTEMA, "Qual o número do pedido neste documento?",
-                                      arquivos, ESQUEMA, max_tokens=256, pensar="baixo", prazo=60)
+    for tentativa in range(1, TENTATIVAS + 1):
+        try:
+            resposta, _ = ia_provedores.gerar(SISTEMA, "Qual o número do pedido neste documento?",
+                                              arquivos, ESQUEMA, max_tokens=256, pensar="baixo", prazo=45)
+            break
+        except ia_provedores.IaIndisponivel:
+            if tentativa == TENTATIVAS:
+                raise
+            time.sleep(ESPERA_COTA)
     return _numero_limpo((resposta or {}).get("pedido") if isinstance(resposta, dict) else "")
 
 
 def _rodar(aplicar: bool, usuario: dict) -> None:
     candidatas = _candidatas()
     liberar_leitura()
+    feitos = set(_estado["processados"])
     _estado.update(total=len(candidatas))
+    _salvar()
+    falhas_seguidas = 0
 
     for item in candidatas:
+        if item["despesa_id"] in feitos:
+            continue
         try:
             pedido = _ler_pedido(item)
+        except ia_provedores.IaIndisponivel as erro:
+            falhas_seguidas += 1
+            log.warning("Pedido da despesa #%s: %s", item["despesa_id"], erro)
+            if falhas_seguidas >= MAX_FALHAS_SEGUIDAS:
+                _estado["falha"] = ("A IA parou de responder (cota gratuita do Gemini esgotada). "
+                                    "Toque em Conferir mais tarde: continua de onde parou.")
+                _salvar()
+                return
+            continue      # não marca como feita: entra na próxima rodada
         except Exception as erro:  # noqa: BLE001 — uma nota ruim não para as outras
             _estado["erros"].append({"despesa_id": item["despesa_id"], "fornecedor": item["fornecedor"],
                                      "erro": str(erro)[:160]})
             log.warning("Pedido da despesa #%s: %s", item["despesa_id"], erro)
         else:
+            falhas_seguidas = 0
             if pedido:
                 depois = f"PED {pedido}"
                 if aplicar:
@@ -115,7 +169,10 @@ def _rodar(aplicar: bool, usuario: dict) -> None:
                                           | {"depois": depois})
             else:
                 _estado["sem_pedido"] += 1
-        _estado["feitos"] += 1
+        _estado["processados"].append(item["despesa_id"])
+        _estado["feitos"] = len(_estado["processados"])
+        _salvar()
+        time.sleep(PAUSA)
 
     if aplicar:
         registrar_auditoria(usuario, "releu_pedidos", "despesa", None,
@@ -138,20 +195,35 @@ def _gravar_conferidos(usuario: dict) -> None:
 def iniciar(app, aplicar: bool, usuario: dict) -> dict:
     """Começa a releitura. Só uma por vez.
 
-    `aplicar` logo depois de uma conferência concluída grava a lista conferida.
-    Sem conferência antes, relê e grava de uma vez.
+    - `aplicar` logo depois de uma conferência concluída grava a lista conferida.
+    - Conferência interrompida (cota, reinício): Conferir de novo continua de onde parou.
+    - Sem conferência antes, `aplicar` relê e grava de uma vez.
     """
     with _trava:
-        if _estado.get("rodando"):
-            return estado()
-        if aplicar and _estado.get("aplicar") is False and _estado.get("fim") and not _estado.get("falha"):
+        anterior = estado()
+        if anterior.get("rodando"):
+            return anterior
+        concluida = anterior.get("fim") and not anterior.get("falha")
+        if aplicar and anterior.get("aplicar") is False and concluida:
             _gravar_conferidos(usuario)
             _estado["aplicar"] = True
+            _salvar()
             return estado()
-        _estado.clear()
-        _estado.update(rodando=True, aplicar=aplicar, total=0, feitos=0, sem_pedido=0,
-                       achados=[], erros=[], inicio=datetime.now().isoformat(timespec="seconds"),
-                       fim=None, falha="")
+
+        retomar = (not aplicar and anterior.get("aplicar") is False and not concluida
+                   and anterior.get("processados"))
+        if retomar:
+            # Notas que deram erro entram de novo; as lidas ficam como estão.
+            com_erro = {e["despesa_id"] for e in anterior.get("erros") or []}
+            _estado.update(rodando=True, fim=None, falha="", erros=[],
+                           processados=[i for i in anterior["processados"] if i not in com_erro])
+        else:
+            _estado.clear()
+            _estado.update(rodando=True, aplicar=aplicar, total=0, feitos=0, sem_pedido=0,
+                           achados=[], erros=[], processados=[],
+                           inicio=datetime.now().isoformat(timespec="seconds"), fim=None, falha="")
+        _estado["feitos"] = len(_estado["processados"])
+        _salvar()
 
     def tarefa():
         with app.app_context():
@@ -162,6 +234,7 @@ def iniciar(app, aplicar: bool, usuario: dict) -> dict:
                 _estado["falha"] = str(erro)[:200]
             finally:
                 _estado.update(rodando=False, fim=datetime.now().isoformat(timespec="seconds"))
+                _salvar()
 
     if EM_SEGUNDO_PLANO:
         threading.Thread(target=tarefa, daemon=True).start()

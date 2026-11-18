@@ -78,6 +78,7 @@ def falso_por_fornecedor(sistema, texto, arquivos, esquema, max_tokens):
 ia_provedores.CHAMADAS['gemini'] = falso_por_fornecedor
 config.IA_ORDEM = ['gemini']; config.GEMINI_API_KEY = 'g'; config.ANTHROPIC_API_KEY = ''
 pedidos_antigos.EM_SEGUNDO_PLANO = False
+pedidos_antigos.PAUSA = 0; pedidos_antigos.ESPERA_COTA = 0
 
 r = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H)
 e = r.get_json()
@@ -101,6 +102,39 @@ ok(c.get('/api/pedidos-antigos').get_json()['aplicar'] is True, 'estado mostra o
 lidas.clear()
 e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
 ok(e['total'] == 1, 'quem já tem PED não é relido', e['total'])
+
+print('== COTA DO GEMINI E RETOMADA ==')
+OUTRA = lancar('Somar', '9001')          # nova nota, ainda sem PED
+TERCEIRA = lancar('Marcon', '9002')
+cota = {'esgotada': True}
+def falso_cota(sistema, texto, arquivos, esquema, max_tokens):
+    lidas.append(arquivos[0]['nome'])
+    if cota['esgotada']:
+        raise ia_provedores.FalhaProvedor('limite gratuito atingido', 429)
+    return json.dumps({'pedido': 'PED7777'})
+ia_provedores.CHAMADAS['gemini'] = falso_cota
+pedidos_antigos.MAX_FALHAS_SEGUIDAS = 2
+e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+ok(not e['rodando'] and 'cota' in e['falha'] and e['feitos'] == 0, 'cota esgotada: para e explica', e)
+
+# Servidor reiniciou: a memória some, o progresso fica no disco.
+pedidos_antigos._estado.clear()
+ok('cota' in c.get('/api/pedidos-antigos').get_json()['falha'], 'estado volta do disco depois do reinício')
+pedidos_antigos._estado.clear()
+pedidos_antigos._estado.update(json.load(open(pedidos_antigos._arquivo(), encoding='utf-8')) | {'rodando': True})
+pedidos_antigos._salvar(); pedidos_antigos._estado.clear()
+ok('reiniciou' in c.get('/api/pedidos-antigos').get_json()['falha'], 'rodada interrompida pelo reinício é avisada')
+
+# Primeira nota lida antes da cota acabar; a retomada não relê a que já foi.
+cota['esgotada'] = False
+pedidos_antigos._estado.update(processados=[TERCEIRA], sem_pedido=1, feitos=1); pedidos_antigos._salvar()
+lidas.clear()
+e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+ok(not e['falha'] and e['feitos'] == e['total'] == 3, 'Conferir de novo continua de onde parou', e)
+ok(len(lidas) == 2, 'nota já lida não é lida de novo', lidas)
+e = c.post('/api/pedidos-antigos', json={'aplicar': True}, headers=H).get_json()
+numeros = {x['id']: x['numero_nota'] for x in c.get(f'/api/semanas/{S}/fechamento').get_json()['despesas']}
+ok(numeros[OUTRA] == 'PED 7777' and numeros[TERCEIRA] == '9002', 'grava a lista da retomada', numeros)
 
 print('== PERMISSÕES ==')
 c.post('/api/usuarios', json={'nome': 'Mestre', 'email': 'mp@obra.local', 'senha': 'mestre123',
