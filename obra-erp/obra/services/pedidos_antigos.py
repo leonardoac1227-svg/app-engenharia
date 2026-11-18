@@ -48,7 +48,9 @@ def estado() -> dict:
 
 
 def _numero_limpo(bruto) -> str:
-    texto = re.sub(r"(?i)\b(pedido|ped|n[º°o])\b\.?:?", "", str(bruto or "")).strip(" :#.-")
+    # "PED3308", "Pedido nº 48213", "Ped.: 5549", "Nº 77" → só o número.
+    texto = re.sub(r"(?i)^\s*(pedido|ped)?\.?\s*(de\s+venda\s*)?(n[º°o]?\.?)?\s*[:#\-]?\s*", "",
+                   str(bruto or "")).strip(" :#.-")
     texto = re.sub(r"\s+", "", texto)
     # Pedido de verdade tem dígito; "-", "N/A" e "sem pedido" ficam de fora.
     return texto[:30] if re.search(r"\d", texto) else ""
@@ -120,10 +122,31 @@ def _rodar(aplicar: bool, usuario: dict) -> None:
                             f"{len(_estado['achados'])} lançamento(s) com pedido gravado")
 
 
+def _gravar_conferidos(usuario: dict) -> None:
+    """Grava exatamente a lista da última conferência, sem reler as notas.
+
+    O que vai para o banco é o que o gestor viu e aprovou — e leva segundos,
+    não os minutos de uma nova leitura pela IA (que ainda poderia variar).
+    """
+    for item in _estado["achados"]:
+        executar("UPDATE despesas SET numero_nota = ? WHERE id = ? AND COALESCE(numero_nota, '') = ?",
+                 (item["depois"], item["despesa_id"], item["antes"]))
+    registrar_auditoria(usuario, "releu_pedidos", "despesa", None,
+                        f"{len(_estado['achados'])} lançamento(s) com pedido gravado")
+
+
 def iniciar(app, aplicar: bool, usuario: dict) -> dict:
-    """Começa a releitura. Só uma por vez."""
+    """Começa a releitura. Só uma por vez.
+
+    `aplicar` logo depois de uma conferência concluída grava a lista conferida.
+    Sem conferência antes, relê e grava de uma vez.
+    """
     with _trava:
         if _estado.get("rodando"):
+            return estado()
+        if aplicar and _estado.get("aplicar") is False and _estado.get("fim") and not _estado.get("falha"):
+            _gravar_conferidos(usuario)
+            _estado["aplicar"] = True
             return estado()
         _estado.clear()
         _estado.update(rodando=True, aplicar=aplicar, total=0, feitos=0, sem_pedido=0,

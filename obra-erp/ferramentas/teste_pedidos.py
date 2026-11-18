@@ -39,9 +39,19 @@ d = padroes.completar({'descricao': 'Aço CA-50 pedido 48213', 'fornecedor': 'So
 ok(d['numero_nota'] == 'PED 48213' and 'pedido' not in d['descricao'].lower(),
    'pedido escrito na descrição vai para o número', d)
 
+for bruto in ('PED PED3308', 'PED3308', 'Pedido 3308'):
+    ok(padroes.completar({'descricao': 'Pregos', 'numero_nota': bruto}, 'O13')['numero_nota'] == 'PED 3308',
+       f'"{bruto}" vira "PED 3308"', padroes.completar({'numero_nota': bruto}, 'O13'))
+
 from obra.utils import rotulo_documento
 ok(rotulo_documento('2353') == 'NF 2353' and rotulo_documento('PED 48213') == 'PED 48213',
    'relatórios não escrevem "NF PED"')
+
+limpo = pedidos_antigos._numero_limpo
+casos = {'PED3308': '3308', 'Pedido nº 48213': '48213', 'Ped.: 5549': '5549', '1-031337': '1-031337',
+         'Nº 77': '77', '': '', 'sem pedido': '', 'N/A': ''}
+ok({k: limpo(k) for k in casos} == casos, 'número do pedido limpo ("PED3308" não vira "PED PED3308")',
+   {k: limpo(k) for k in casos})
 
 print('== RELEITURA DAS NOTAS ANTIGAS ==')
 def jpeg():
@@ -81,6 +91,7 @@ ok({x['numero_nota'] for x in fe['despesas']} == {'5521', '2353', '343245'}, 'co
 
 lidas.clear()
 e = c.post('/api/pedidos-antigos', json={'aplicar': True}, headers=H).get_json()
+ok(lidas == [], 'gravar usa a lista conferida, sem reler as notas', lidas)
 fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
 numeros = {x['id']: x['numero_nota'] for x in fe['despesas']}
 ok(numeros[SEM] == 'PED 48213' and numeros[COM] == '5521' and numeros[SEM_ARQUIVO] == '343245',

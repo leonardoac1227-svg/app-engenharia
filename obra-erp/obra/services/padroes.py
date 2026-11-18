@@ -167,6 +167,10 @@ def completar(dados: dict, nome_obra: str) -> dict:
     """Devolve os dados da despesa com o que faltava preenchido pelo padrão."""
     saida = dict(dados)
     _separar_numero(saida)
+    # Nota que imprime "PED3308": a IA às vezes devolve "PED PED3308" ou "PED3308".
+    if saida.get("numero_nota"):
+        saida["numero_nota"] = re.sub(r"(?i)^(?:ped(?:ido)?\.?\s*)+(?=\d)", "PED ",
+                                      texto(saida["numero_nota"], 40)).strip()
     fornecedor = fornecedor_padrao(saida.get("fornecedor"))
     alvo = _chave(saida.get("descricao"))
     padrao = _padrao_de(" ".join(p for p in (alvo, _chave(fornecedor)) if p), fornecedor, _chave(nome_obra))
