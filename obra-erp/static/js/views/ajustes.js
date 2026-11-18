@@ -132,7 +132,7 @@ export async function renderizar(raiz) {
       <div class="section-head"><h3>Número do pedido nas notas antigas</h3></div>
       <div class="card" id="cardPedidos">
         <p class="small muted">
-          A IA relê os PDFs e fotos das notas já lançadas e procura o número do pedido.
+          A IA relê os PDFs e fotos das notas da semana passada e desta e procura o número do pedido.
           Primeiro <b>Conferir</b> mostra o que mudaria; depois <b>Gravar</b> troca o número da
           nota pelo pedido ("PED 48213").
         </p>

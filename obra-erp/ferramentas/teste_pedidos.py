@@ -80,7 +80,7 @@ config.IA_ORDEM = ['gemini']; config.GEMINI_API_KEY = 'g'; config.ANTHROPIC_API_
 pedidos_antigos.EM_SEGUNDO_PLANO = False
 pedidos_antigos.PAUSA = 0; pedidos_antigos.ESPERA_COTA = 0
 
-r = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H)
+r = c.post('/api/pedidos-antigos', json={'aplicar': False, 'desde': '2026-01-01'}, headers=H)
 e = r.get_json()
 ok(r.status_code == 200 and not e['rodando'], 'conferência roda até o fim', e)
 ok(e['total'] == 2, 'só lançamentos com nota anexada entram', e['total'])
@@ -91,7 +91,7 @@ fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
 ok({x['numero_nota'] for x in fe['despesas']} == {'5521', '2353', '343245'}, 'conferir NÃO grava nada')
 
 lidas.clear()
-e = c.post('/api/pedidos-antigos', json={'aplicar': True}, headers=H).get_json()
+e = c.post('/api/pedidos-antigos', json={'aplicar': True, 'desde': '2026-01-01'}, headers=H).get_json()
 ok(lidas == [], 'gravar usa a lista conferida, sem reler as notas', lidas)
 fe = c.get(f'/api/semanas/{S}/fechamento').get_json()
 numeros = {x['id']: x['numero_nota'] for x in fe['despesas']}
@@ -100,8 +100,15 @@ ok(numeros[SEM] == 'PED 48213' and numeros[COM] == '5521' and numeros[SEM_ARQUIV
 ok(c.get('/api/pedidos-antigos').get_json()['aplicar'] is True, 'estado mostra o resultado')
 
 lidas.clear()
-e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+e = c.post('/api/pedidos-antigos', json={'aplicar': False, 'desde': '2026-01-01'}, headers=H).get_json()
 ok(e['total'] == 1, 'quem já tem PED não é relido', e['total'])
+
+ok(pedidos_antigos.inicio_semana_passada('2026-11-18') == '2026-11-09'
+   and pedidos_antigos.inicio_semana_passada('2026-11-16') == '2026-11-09',
+   'padrão: desde a segunda-feira da semana passada')
+lidas.clear()
+e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+ok(e['total'] == 0 and lidas == [], 'sem data: notas antigas (agosto) ficam de fora', e)
 
 print('== COTA DO GEMINI E RETOMADA ==')
 OUTRA = lancar('Somar', '9001')          # nova nota, ainda sem PED
@@ -114,7 +121,7 @@ def falso_cota(sistema, texto, arquivos, esquema, max_tokens):
     return json.dumps({'pedido': 'PED7777'})
 ia_provedores.CHAMADAS['gemini'] = falso_cota
 pedidos_antigos.MAX_FALHAS_SEGUIDAS = 2
-e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+e = c.post('/api/pedidos-antigos', json={'aplicar': False, 'desde': '2026-01-01'}, headers=H).get_json()
 ok(not e['rodando'] and 'cota' in e['falha'] and e['feitos'] == 0, 'cota esgotada: para e explica', e)
 
 # Servidor reiniciou: a memória some, o progresso fica no disco.
@@ -129,10 +136,10 @@ ok('reiniciou' in c.get('/api/pedidos-antigos').get_json()['falha'], 'rodada int
 cota['esgotada'] = False
 pedidos_antigos._estado.update(processados=[TERCEIRA], sem_pedido=1, feitos=1); pedidos_antigos._salvar()
 lidas.clear()
-e = c.post('/api/pedidos-antigos', json={'aplicar': False}, headers=H).get_json()
+e = c.post('/api/pedidos-antigos', json={'aplicar': False, 'desde': '2026-01-01'}, headers=H).get_json()
 ok(not e['falha'] and e['feitos'] == e['total'] == 3, 'Conferir de novo continua de onde parou', e)
 ok(len(lidas) == 2, 'nota já lida não é lida de novo', lidas)
-e = c.post('/api/pedidos-antigos', json={'aplicar': True}, headers=H).get_json()
+e = c.post('/api/pedidos-antigos', json={'aplicar': True, 'desde': '2026-01-01'}, headers=H).get_json()
 numeros = {x['id']: x['numero_nota'] for x in c.get(f'/api/semanas/{S}/fechamento').get_json()['despesas']}
 ok(numeros[OUTRA] == 'PED 7777' and numeros[TERCEIRA] == '9002', 'grava a lista da retomada', numeros)
 

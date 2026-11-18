@@ -266,9 +266,10 @@ def pedidos_antigos_iniciar():
 
     if not ia_provedores.disponivel():
         raise ApiErro("A IA está desligada no servidor: sem ela não dá para reler as notas.", 400)
-    aplicar = bool((request.get_json(silent=True) or {}).get("aplicar"))
-    return jsonify(pedidos_antigos.iniciar(current_app._get_current_object(), aplicar,
-                                           dict(usuario_atual())))
+    corpo = request.get_json(silent=True) or {}
+    desde = str(corpo.get("desde") or "")[:10] or None   # padrão: semana passada e a atual
+    return jsonify(pedidos_antigos.iniciar(current_app._get_current_object(), bool(corpo.get("aplicar")),
+                                           dict(usuario_atual()), desde))
 
 
 @bp.get("/diagnostico")

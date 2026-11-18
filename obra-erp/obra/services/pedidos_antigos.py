@@ -18,11 +18,11 @@ import os
 import re
 import threading
 import time
-from datetime import datetime
+from datetime import date, datetime, timedelta
 
 from .. import config
 from ..db import executar, liberar_leitura, registrar_auditoria, todos
-from ..utils import bytes_anexo
+from ..utils import bytes_anexo, hoje_iso
 from . import ia_provedores
 
 log = logging.getLogger("obra-erp")
@@ -88,15 +88,21 @@ def _numero_limpo(bruto) -> str:
     return texto[:30] if re.search(r"\d", texto) else ""
 
 
-def _candidatas() -> list[dict]:
-    """Lançamentos com nota anexada que ainda não estão com o pedido."""
+def inicio_semana_passada(hoje: str | None = None) -> str:
+    """Segunda-feira da semana passada: o padrão é reler só a semana passada e a atual."""
+    dia = date.fromisoformat((hoje or hoje_iso())[:10])
+    return (dia - timedelta(days=dia.weekday() + 7)).isoformat()
+
+
+def _candidatas(desde: str) -> list[dict]:
+    """Lançamentos com nota anexada, a partir de `desde`, que ainda não estão com o pedido."""
     linhas = todos(
         """SELECT x.id, x.fornecedor, x.descricao, x.valor, x.numero_nota, d.data, a.arquivo
              FROM despesas x
              JOIN despesa_anexos a ON a.despesa_id = x.id
              JOIN dias d ON d.id = x.dia_id
-            WHERE COALESCE(x.numero_nota, '') NOT LIKE ?
-            ORDER BY x.id DESC, a.id""", ("PED %",))  # "%" no texto do SQL quebra o psycopg
+            WHERE COALESCE(x.numero_nota, '') NOT LIKE ? AND d.data >= ?
+            ORDER BY x.id DESC, a.id""", ("PED %", desde))  # "%" no texto do SQL quebra o psycopg
     por_despesa: dict[int, dict] = {}
     for linha in linhas:
         extensao = os.path.splitext(str(linha["arquivo"]))[1].lower()
@@ -133,7 +139,7 @@ def _ler_pedido(item: dict) -> str:
 
 
 def _rodar(aplicar: bool, usuario: dict) -> None:
-    candidatas = _candidatas()
+    candidatas = _candidatas(_estado["desde"])
     liberar_leitura()
     feitos = set(_estado["processados"])
     _estado.update(total=len(candidatas))
@@ -192,26 +198,28 @@ def _gravar_conferidos(usuario: dict) -> None:
                         f"{len(_estado['achados'])} lançamento(s) com pedido gravado")
 
 
-def iniciar(app, aplicar: bool, usuario: dict) -> dict:
+def iniciar(app, aplicar: bool, usuario: dict, desde: str | None = None) -> dict:
     """Começa a releitura. Só uma por vez.
 
     - `aplicar` logo depois de uma conferência concluída grava a lista conferida.
     - Conferência interrompida (cota, reinício): Conferir de novo continua de onde parou.
     - Sem conferência antes, `aplicar` relê e grava de uma vez.
+    - `desde`: data inicial (padrão: segunda-feira da semana passada).
     """
+    desde = desde or inicio_semana_passada()
     with _trava:
         anterior = estado()
         if anterior.get("rodando"):
             return anterior
         concluida = anterior.get("fim") and not anterior.get("falha")
-        if aplicar and anterior.get("aplicar") is False and concluida:
+        if aplicar and anterior.get("aplicar") is False and concluida and anterior.get("desde") == desde:
             _gravar_conferidos(usuario)
             _estado["aplicar"] = True
             _salvar()
             return estado()
 
         retomar = (not aplicar and anterior.get("aplicar") is False and not concluida
-                   and anterior.get("processados"))
+                   and anterior.get("processados") and anterior.get("desde") == desde)
         if retomar:
             # Notas que deram erro entram de novo; as lidas ficam como estão.
             com_erro = {e["despesa_id"] for e in anterior.get("erros") or []}
@@ -220,7 +228,7 @@ def iniciar(app, aplicar: bool, usuario: dict) -> dict:
         else:
             _estado.clear()
             _estado.update(rodando=True, aplicar=aplicar, total=0, feitos=0, sem_pedido=0,
-                           achados=[], erros=[], processados=[],
+                           achados=[], erros=[], processados=[], desde=desde,
                            inicio=datetime.now().isoformat(timespec="seconds"), fim=None, falha="")
         _estado["feitos"] = len(_estado["processados"])
         _salvar()
