@@ -35,6 +35,7 @@ Procure em TODA a página o NÚMERO DO PEDIDO impresso: "Pedido", "Nº do pedido
 "Pedido de venda", "Nº pedido cliente", "Pedido/Orçamento" — no cabeçalho, no corpo ou nas
 informações complementares / dados adicionais.
 NÃO é pedido: número da NF, série, chave de acesso, protocolo, CNPJ, CPF, código de produto, NCM,
+número de CONTRATO (locação), "Nosso número" e "Nº documento" de boleto,
 CFOP, código de barras, número do caixa ou do cupom (COO/CCF).
 Responda só o número do pedido, sem o texto "pedido". Sem pedido impresso, responda pedido vazio.
 Não invente."""
