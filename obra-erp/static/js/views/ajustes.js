@@ -128,6 +128,21 @@ export async function renderizar(raiz) {
         </p>
       </div>` : ''}
 
+    ${admin ? `
+      <div class="section-head"><h3>Número do pedido nas notas antigas</h3></div>
+      <div class="card" id="cardPedidos">
+        <p class="small muted">
+          A IA relê os PDFs e fotos das notas já lançadas e procura o número do pedido.
+          Primeiro <b>Conferir</b> mostra o que mudaria; depois <b>Gravar</b> troca o número da
+          nota pelo pedido ("PED 48213").
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-outline btn-small" data-acao="pedidos-conferir">Conferir</button>
+          <button class="btn btn-small" data-acao="pedidos-gravar">Gravar pedidos</button>
+        </div>
+        <div id="resultadoPedidos" style="margin-top:10px"></div>
+      </div>` : ''}
+
     ${admin && estado.obraId ? `
       <div class="section-head"><h3>Zona de risco</h3></div>
       <button class="btn btn-perigo" data-acao="arquivar">Arquivar esta obra</button>
@@ -298,6 +313,43 @@ function ligarEventos(raiz, { obra, usuarios }) {
       await renderizar(raiz);
     };
   });
+
+  const mostrarPedidos = (d) => {
+    const alvo = raiz.querySelector('#resultadoPedidos');
+    if (!alvo || !d || d.total === undefined) return;
+    const modo = d.aplicar ? 'Gravando' : 'Conferindo';
+    const cabeca = d.rodando
+      ? `${modo}... ${num(d.feitos)} de ${num(d.total)} nota(s)`
+      : `${d.aplicar ? 'Gravado' : 'Conferido'}: ${num(d.total)} nota(s) · ${num(d.achados.length)} com pedido`
+        + ` · ${num(d.sem_pedido)} sem pedido${d.erros.length ? ` · ${num(d.erros.length)} não abriram` : ''}`;
+    alvo.innerHTML = `
+      <div class="item-titulo">${cabeca}</div>
+      ${d.falha ? `<div class="item-sub">${esc(d.falha)}</div>` : ''}
+      ${d.achados.map((a) => `
+        <div class="item-sub" style="padding:3px 0">
+          #${a.despesa_id} · ${esc(a.data)} · ${esc(a.fornecedor || '-')} · ${moeda(a.valor)}
+          · ${esc(a.antes || 'sem número')} → <b>${esc(a.depois)}</b>
+        </div>`).join('')}`;
+    if (d.rodando) setTimeout(async () => mostrarPedidos(await api.get('/api/pedidos-antigos', { semCache: true })), 3000);
+  };
+  const iniciarPedidos = async (aplicar) => {
+    if (aplicar) {
+      const ok = await confirmar({
+        titulo: 'Gravar o pedido nas notas antigas?',
+        texto: 'Onde a IA achar o número do pedido, ele substitui o número da nota no lançamento.',
+        confirmar: 'Gravar',
+      });
+      if (!ok) return;
+    }
+    try {
+      mostrarPedidos(await api.post('/api/pedidos-antigos', { aplicar }));
+    } catch (erro) {
+      toast(erro.message, 'erro');
+    }
+  };
+  acao('pedidos-conferir', () => iniciarPedidos(false));
+  acao('pedidos-gravar', () => iniciarPedidos(true));
+  if (admin) api.get('/api/pedidos-antigos', { semCache: true }).then(mostrarPedidos).catch(() => {});
 
   acao('diagnostico', async () => {
     const card = raiz.querySelector('#cardDiagnostico');

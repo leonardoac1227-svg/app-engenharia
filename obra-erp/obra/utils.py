@@ -269,3 +269,14 @@ def formatar_bytes(quantidade: int) -> str:
             return f"{valor:.{casas}f}".replace(".", ",") + f" {unidade}"
         valor /= 1024
     return f"{valor:.1f} GB"
+
+
+def rotulo_documento(numero) -> str:
+    """"NF 2353" para nota fiscal; "PED 48213", "ORC 31797", "REC 1191" ficam como estão.
+
+    O número que já vem com o tipo na frente não ganha outro "NF" (evita "NF PED 48213").
+    """
+    numero = str(numero or "").strip()
+    if not numero:
+        return ""
+    return numero if numero[:1].isalpha() else f"NF {numero}"

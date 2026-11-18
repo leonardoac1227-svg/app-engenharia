@@ -7,7 +7,7 @@ import csv
 import io
 from datetime import datetime
 
-from ..utils import numero_br, data_br, moeda, slug
+from ..utils import numero_br, data_br, moeda, slug, rotulo_documento
 
 
 def nome_arquivo(dados: dict, extensao: str) -> str:
@@ -83,7 +83,7 @@ def relatorio_texto(d: dict, resumo_executivo: str = "") -> str:
                      else x["nome_arquivo"] or ("anexo" if x["imagem_path"] else "sem anexo"))
             venc = f" · vence {data_br(x['vencimento'])}" if x["vencimento"] else ""
             forn = f" · {x['fornecedor']}" if x["fornecedor"] else ""
-            nota = f" · NF {x['numero_nota']}" if x.get("numero_nota") else ""
+            nota = f" · {rotulo_documento(x['numero_nota'])}" if x.get("numero_nota") else ""
             reembolso = (f" · reembolsar {x['reembolsar_para']}"
                          if x.get("reembolsar_para") else "")
             L.append(f"   - [{x['dia_semana']}] {x['categoria']} · {x['descricao']}{forn}{nota} · "

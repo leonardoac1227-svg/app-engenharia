@@ -105,8 +105,9 @@ FORNECEDORES = (
 )
 
 _NUMERO_NA_DESCRICAO = re.compile(
-    r"[\s\-–·,(]*\b(recibo|nota fiscal|nota|nf-?e?|or[cç]amento|orc)\b\s*(?:n[º°o.]*\s*)?(\d{2,})\)?", re.I)
-_PREFIXO_NUMERO = {"rec": "REC", "orc": "ORC", "orç": "ORC"}
+    r"[\s\-–·,(]*\b(recibo|nota fiscal|nota|nf-?e?|or[cç]amento|orc|pedido|ped)\b\.?\s*(?:n[º°o.]*\s*)?(\d{2,})\)?",
+    re.I)
+_PREFIXO_NUMERO = {"rec": "REC", "orc": "ORC", "orç": "ORC", "ped": "PED"}
 
 # Status quando nem o gestor nem o documento disseram outra coisa (histórico real).
 LOJAS_REEMBOLSO = ("O engenheiro", "Renova", "Renove", "Uniformizar", "Bahia copiadora", "Feira EPI",
@@ -193,6 +194,9 @@ EXEMPLOS = (
     ('"Lança no I19 essa nota da Inova, espaçadores pro porcelanato da piscina" + foto da nota',
      'despesa: descricao "Espaçadores para assentamento de porcelanato da piscina", fornecedor "Inova civil", '
      'valor = total da nota, numero_nota = nº da NF, Em Aberto, Material, anexos [0]'),
+    ('"Nota da Somar, aço pra laje do O13" + NF 5521 que traz "Pedido: 48213" no cabeçalho',
+     'despesa: "Aço para laje", fornecedor "Somar", numero_nota "PED 48213" (o pedido, não a NF), '
+     'valor = total da nota, Em Aberto, Material, anexos [0]'),
     ('"e o frete disso" (logo depois da nota acima)',
      'despesa: "Frete referente a espaçadores para assentamento de porcelanato da piscina", Diego motoboy, '
      '30, Em Aberto, Frete'),

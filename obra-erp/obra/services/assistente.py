@@ -98,9 +98,15 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - Fornecedor: só o que o usuário disser ou o que estiver impresso no documento. Sem documento e sem
   fornecedor dito, deixe vazio: não copie de "padroes_recentes" nem de lançamentos parecidos.
 - Nome do fornecedor: o nome curto pelo qual a loja é conhecida ("Inova civil", "O engenheiro", "Posto Sossego"),
-  com maiúscula só no começo. Sem "LTDA", CNPJ, cidade ou filial. Número: o da NF; se não for nota fiscal
-  (orçamento, pedido, "não é documento fiscal", recibo), o número dele com o tipo na frente
-  (ex.: "ORC 31797"). PIX: o ID da transação (E2E) e o recebedor como fornecedor.
+  com maiúscula só no começo. Sem "LTDA", CNPJ, cidade ou filial.
+- NÚMERO (numero_nota), nesta ordem:
+  1. Se o documento tiver NÚMERO DO PEDIDO impresso ("Pedido", "Nº do pedido", "Ped.", "Pedido de venda",
+     "Nº pedido cliente"), use o PEDIDO, no lugar da NF: "PED 48213". Vale também para nota fiscal que
+     traga o pedido no cabeçalho ou nas informações complementares. Procure em toda a página.
+  2. Sem pedido: o número da NF.
+  3. Outro documento (orçamento, "não é documento fiscal", recibo): o número com o tipo na frente
+     ("ORC 31797", "REC 1191").
+  PIX: o ID da transação (E2E) e o recebedor como fornecedor.
 - STATUS — como esta empresa lança (vem do histórico real, não da forma de pagamento impressa):
   1. O que o usuário disser vale sempre, em qualquer parte da mensagem, inclusive no fim:
      "reembolso", "paguei do bolso", "eu paguei" = Reembolso; "em aberto", "a pagar", "faturado" =

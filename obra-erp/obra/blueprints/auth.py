@@ -247,6 +247,30 @@ def diagnostico_conexoes():
         {**dict(l), "travado_por": list(l["travado_por"] or [])} for l in linhas]})
 
 
+@bp.get("/pedidos-antigos")
+@login_obrigatorio
+@papel_obrigatorio("gestor")
+def pedidos_antigos_estado():
+    """Andamento e resultado da releitura de pedidos nas notas já enviadas."""
+    from ..services import pedidos_antigos
+    return jsonify(pedidos_antigos.estado())
+
+
+@bp.post("/pedidos-antigos")
+@login_obrigatorio
+@papel_obrigatorio("gestor")
+def pedidos_antigos_iniciar():
+    """Relê as notas antigas. `aplicar: false` só confere; `true` grava o pedido."""
+    from flask import current_app
+    from ..services import ia_provedores, pedidos_antigos
+
+    if not ia_provedores.disponivel():
+        raise ApiErro("A IA está desligada no servidor: sem ela não dá para reler as notas.", 400)
+    aplicar = bool((request.get_json(silent=True) or {}).get("aplicar"))
+    return jsonify(pedidos_antigos.iniciar(current_app._get_current_object(), aplicar,
+                                           dict(usuario_atual())))
+
+
 @bp.get("/diagnostico")
 @login_obrigatorio
 @papel_obrigatorio("gestor")

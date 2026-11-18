@@ -20,7 +20,7 @@ import zipfile
 
 from ..db import todos
 from .parcelamento import sql_fora_da_semana
-from ..utils import data_br
+from ..utils import data_br, rotulo_documento
 
 PASTA_NOTAS = "notas-fiscais"
 PASTA_FOTOS = "fotos"
@@ -47,7 +47,7 @@ def listar_arquivos(semana_id: int) -> dict:
         "titulo": linha["descricao"] or "Lançamento",
         "subtitulo": " · ".join(filter(None, [
             linha["fornecedor"] or "",
-            f"NF {linha['numero_nota']}" if linha["numero_nota"] else "",
+            rotulo_documento(linha["numero_nota"]),
             linha["categoria"] or "",
         ])),
         "data": linha["data"],
@@ -103,7 +103,7 @@ def _nome_no_zip(item: dict) -> str:
     if item["tipo"] == "nota":
         partes = [data]
         if item.get("numero_nota"):
-            partes.append(f"NF-{_limpo(item['numero_nota'], 20)}")
+            partes.append(_limpo(rotulo_documento(item['numero_nota']), 24).replace(" ", "-"))
         partes.append(_limpo(item["subtitulo"].split(" · ")[0] or item["titulo"], 32))
         if item.get("valor"):
             partes.append(f"R${item['valor']:.2f}".replace(".", ","))

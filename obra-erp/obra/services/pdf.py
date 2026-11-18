@@ -22,7 +22,7 @@ from reportlab.pdfgen import canvas as pdfcanvas
 from reportlab.platypus import (BaseDocTemplate, Flowable, Frame, Image, KeepTogether,
                                 PageTemplate, Paragraph, Spacer, Table, TableStyle)
 
-from ..utils import bytes_anexo, data_br, moeda, numero_br
+from ..utils import bytes_anexo, data_br, moeda, numero_br, rotulo_documento
 
 LATAO = colors.HexColor("#9A6F35")
 LATAO_CLARO = colors.HexColor("#F2E7D5")
@@ -391,7 +391,7 @@ def gerar_pdf(d: dict, resumo_executivo: str = "") -> bytes:
             if x["fornecedor"]:
                 rodape.append(escape(x["fornecedor"]))
             if x.get("numero_nota"):
-                rodape.append(f'NF {escape(x["numero_nota"])}')
+                rodape.append(escape(rotulo_documento(x["numero_nota"])))
             if rodape:
                 desc += f'<br/><font color="{CINZA.hexval()}" size="7">{" · ".join(rodape)}</font>'
             nomes_anexos = [a["nome"] for a in x.get("anexos") or []] or (

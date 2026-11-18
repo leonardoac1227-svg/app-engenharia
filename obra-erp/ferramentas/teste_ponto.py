@@ -100,22 +100,24 @@ texto_todo = '\n'.join(str(v) for linha in celulas for v in linha if v is not No
 ok('FOLHA' not in texto_todo.upper().replace('FOLHA DE PONTO', ''), 'seção de folha com valor sumiu')
 ok('PONTO DA EQUIPE - SEMANA 01' in texto_todo, 'seção de ponto da equipe aparece')
 linha_joao = next(l for l in celulas if l[0] == 'JOÃO')
-ok(linha_joao[4] == '35 h' and linha_joao[3] == 'PONTO', 'linha do funcionário mostra horas, não R$', linha_joao)
+ok(linha_joao[4] == '35 H' and linha_joao[3] == 'PONTO', 'linha do funcionário mostra horas, não R$', linha_joao)
 ok(not any(isinstance(l[4], (int, float)) and l[4] > 0 and l[3] == 'PONTO' for l in celulas),
    'nenhum valor em dinheiro nas linhas do ponto')
-ok(linha_joao[6] == 'Ter 18/08: 7 h de 8 h (faltaram 1 h) · sem justificativa',
+ok(linha_joao[6] == 'TER 18/08: 7 H DE 8 H (FALTARAM 1 H) · SEM JUSTIFICATIVA',
    'coluna lateral com a ocorrência do dia', linha_joao[6])
 linha_maria = next(l for l in celulas if l[0] == 'MARIA')
-ok('meio turno' in linha_maria[6] and 'Atestado médico' in linha_maria[6], 'meio turno com motivo', linha_maria[6])
+ok('MEIO TURNO' in linha_maria[6] and 'ATESTADO MÉDICO' in linha_maria[6], 'meio turno com motivo', linha_maria[6])
 linha_pedro = next(l for l in celulas if l[0] == 'PEDRO')
 ok(linha_pedro[6].count('\n') == 2, 'várias ocorrências, uma por linha', linha_pedro[6])
-ok(any(str(l[0] or '').startswith('Ponto não lançado em: Sex') for l in celulas), 'avisa o dia sem ponto')
+ok(any(str(l[0] or '').startswith('PONTO NÃO LANÇADO EM: SEX') for l in celulas), 'avisa o dia sem ponto')
 
 total = next(l for l in celulas if str(l[0] or '').startswith('TOTAL A PAGAR'))
 somadas = [celulas[int(ref[1:]) - 1][0] for ref in total[3][1:].split('+')]
 ok(len(somadas) == 2 and 'REEMBOLSO' in somadas[0] and 'ABERTAS' in somadas[1],
    'total a pagar soma só reembolso e notas abertas (sem folha)', (total[3], somadas))
-ok(next(l for l in celulas if l[0] == 'Fornecedor')[6] == 'Ocorrências do ponto', 'cabeçalho da coluna lateral')
+ok(next(l for l in celulas if l[0] == 'FORNECEDOR')[6] == 'OCORRÊNCIAS DO PONTO', 'cabeçalho da coluna lateral')
+ok(not any(isinstance(v, str) and not v.startswith('=') and v != v.upper() for l in celulas for v in l),
+   'planilha toda em CAIXA ALTA', [v for l in celulas for v in l if isinstance(v, str) and v != v.upper()][:5])
 
 pdf = c.get(f'/api/semanas/{S}/relatorio.pdf')
 ok(pdf.status_code == 200 and pdf.data[:4] == b'%PDF', 'PDF continua saindo')

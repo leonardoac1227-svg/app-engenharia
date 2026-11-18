@@ -409,6 +409,20 @@ def _nome_da_aba(obra: dict, usados: set[str]) -> str:
     return nome
 
 
+def _tudo_maiusculo(planilha) -> None:
+    """O relatório circula todo em CAIXA ALTA: fornecedor, descrição, títulos, ponto.
+
+    Feito no fim, célula por célula, para valer para qualquer texto que entrar
+    no relatório no futuro. Fórmulas (=SUM...) ficam como estão.
+    """
+    for ws in planilha.worksheets:
+        ws.title = ws.title.upper()
+        for linha in ws.iter_rows():
+            for celula in linha:
+                if isinstance(celula.value, str) and not celula.value.startswith("="):
+                    celula.value = celula.value.upper()
+
+
 def gerar_planilha(abas: list[tuple[dict, dict]]) -> bytes:
     planilha = Workbook()
     planilha.remove(planilha.active)
@@ -418,6 +432,7 @@ def gerar_planilha(abas: list[tuple[dict, dict]]) -> bytes:
         aba = planilha.create_sheet(_nome_da_aba(obra, usados))
         montar_aba(aba, obra, dados)
 
+    _tudo_maiusculo(planilha)
     buffer = io.BytesIO()
     planilha.save(buffer)
     return buffer.getvalue()
