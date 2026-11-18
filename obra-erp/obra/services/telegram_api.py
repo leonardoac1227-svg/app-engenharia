@@ -33,6 +33,17 @@ class ErroTelegram(Exception):
     pass
 
 
+def _registrar_pilhas(presa: threading.Thread) -> None:
+    """Diagnóstico: onde a chamada presa (e cada outra thread) está parada."""
+    import sys
+    import traceback
+    for ident, quadro in sys._current_frames().items():
+        nome = next((t.name for t in threading.enumerate() if t.ident == ident), str(ident))
+        marca = " <== CHAMADA PRESA" if ident == presa.ident else ""
+        pilha = "".join(traceback.format_stack(quadro)[-8:])
+        log.warning("Pilha da thread %s%s:\n%s", nome, marca, pilha)
+
+
 def _abrir(req, tempo: float):
     """`urlopen` com prazo total.
 
@@ -57,6 +68,7 @@ def _abrir(req, tempo: float):
     if linha.is_alive():
         log.warning("Telegram: sem resposta em %.0fs (%s)", time.monotonic() - inicio,
                     getattr(req, "full_url", req).split("/bot")[0])
+        _registrar_pilhas(linha)
         raise ErroTelegram(f"o Telegram não respondeu em {tempo:.0f}s")
     if "erro" in resultado:
         raise resultado["erro"]

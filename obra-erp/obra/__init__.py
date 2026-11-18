@@ -30,6 +30,9 @@ ROTAS_SEM_CSRF = {"/api/auth/login"}
 def create_app() -> Flask:
     from . import rede
     rede.instalar()   # DNS com prazo: chamada ao Telegram/Gemini não fica presa sem fim
+    import faulthandler
+    # Worker morto por timeout (SIGABRT do gunicorn): a pilha de cada thread vai para o log.
+    faulthandler.enable(all_threads=True)
     app = Flask(
         __name__,
         static_folder=os.path.join(config.BASE_DIR, "static"),
