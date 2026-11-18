@@ -28,6 +28,8 @@ ROTAS_SEM_CSRF = {"/api/auth/login"}
 
 
 def create_app() -> Flask:
+    from . import rede
+    rede.instalar()   # DNS com prazo: chamada ao Telegram/Gemini não fica presa sem fim
     app = Flask(
         __name__,
         static_folder=os.path.join(config.BASE_DIR, "static"),
