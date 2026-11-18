@@ -103,7 +103,7 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - NÚMERO (numero_nota), nesta ordem:
   1. Se o documento tiver NÚMERO DO PEDIDO impresso ("Pedido", "Nº do pedido", "Ped.", "Pedido de venda",
      "Nº pedido cliente"), use o PEDIDO, no lugar da NF: "PED 48213". Número de contrato ou de boleto
-     não é pedido. Vale também para nota fiscal que
+     não é pedido. O NOME DO ARQUIVO também vale ("PED 3248 OZIRLEI.pdf" → "PED 3248"). Vale também para nota fiscal que
      traga o pedido no cabeçalho ou nas informações complementares. Procure em toda a página.
   2. Sem pedido: o número da NF.
   3. Outro documento (orçamento, "não é documento fiscal", recibo): o número com o tipo na frente

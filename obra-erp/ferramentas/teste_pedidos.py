@@ -43,6 +43,12 @@ for bruto in ('PED PED3308', 'PED3308', 'Pedido 3308'):
     ok(padroes.completar({'descricao': 'Pregos', 'numero_nota': bruto}, 'O13')['numero_nota'] == 'PED 3308',
        f'"{bruto}" vira "PED 3308"', padroes.completar({'numero_nota': bruto}, 'O13'))
 
+from obra.services.acoes import pedido_no_nome
+nomes = {'PED 3248 OZIRLEI OBRA DAMHA 1 O 13.pdf': 'PED 3248', 'pedido_00041214.jpg': 'PED 00041214',
+         'Ped. nº 5549 cupom.jpg': 'PED 5549', 'nota-2353.pdf': '', 'speed 300.pdf': '', 'foto.jpg': ''}
+ok({n: pedido_no_nome([n]) for n in nomes} == nomes, 'pedido lido do nome do arquivo',
+   {n: pedido_no_nome([n]) for n in nomes})
+
 from obra.utils import rotulo_documento
 ok(rotulo_documento('2353') == 'NF 2353' and rotulo_documento('PED 48213') == 'PED 48213',
    'relatórios não escrevem "NF PED"')

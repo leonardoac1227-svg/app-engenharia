@@ -399,7 +399,7 @@ def montar_aba(planilha, obra: dict, dados: dict) -> None:
 
 
 def _nome_da_aba(obra: dict, usados: set[str]) -> str:
-    base = f"RelatorioLancamento {_sigla_da_obra(obra)}"[:31]
+    base = f"RELATORIOLANCAMENTO {_sigla_da_obra(obra)}".upper()[:31]
     nome, contador = base, 2
     while nome in usados:
         sufixo = f" {contador}"
@@ -416,7 +416,8 @@ def _tudo_maiusculo(planilha) -> None:
     no relatório no futuro. Fórmulas (=SUM...) ficam como estão.
     """
     for ws in planilha.worksheets:
-        ws.title = ws.title.upper()
+        # O nome da aba já nasce em maiúsculas (_nome_da_aba). Renomear aqui fazia o
+        # openpyxl achar que o nome repetia o da própria aba e somar um "1" no fim.
         for linha in ws.iter_rows():
             for celula in linha:
                 if isinstance(celula.value, str) and not celula.value.startswith("="):

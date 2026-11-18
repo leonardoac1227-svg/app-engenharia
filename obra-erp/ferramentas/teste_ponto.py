@@ -118,6 +118,7 @@ ok(len(somadas) == 2 and 'REEMBOLSO' in somadas[0] and 'ABERTAS' in somadas[1],
 ok(next(l for l in celulas if l[0] == 'FORNECEDOR')[6] == 'OCORRÊNCIAS DO PONTO', 'cabeçalho da coluna lateral')
 ok(not any(isinstance(v, str) and not v.startswith('=') and v != v.upper() for l in celulas for v in l),
    'planilha toda em CAIXA ALTA', [v for l in celulas for v in l if isinstance(v, str) and v != v.upper()][:5])
+ok(ws.title == 'RELATORIOLANCAMENTO 22', 'aba em maiúsculas e sem "1" no fim', ws.title)
 
 pdf = c.get(f'/api/semanas/{S}/relatorio.pdf')
 ok(pdf.status_code == 200 and pdf.data[:4] == b'%PDF', 'PDF continua saindo')

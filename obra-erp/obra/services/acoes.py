@@ -17,6 +17,7 @@ uma função nova à IA, basta acrescentar uma entrada no CATALOGO.
 from __future__ import annotations
 
 import json
+import re
 import unicodedata
 from dataclasses import dataclass, field
 from datetime import date
@@ -407,6 +408,18 @@ def _parcelas_da_nota(bruto) -> list[dict]:
     return sorted(lista, key=lambda p: p["vencimento"])[:36]
 
 
+_PEDIDO_NO_NOME = re.compile(r"(?i)(?:^|[^a-z])ped(?:ido)?[\s._\-]*(?:n[º°o]?[\s._\-]*)?(\d[\d\-]{1,19})")
+
+
+def pedido_no_nome(nomes) -> str:
+    """"PED 3248 OZIRLEI OBRA DAMHA.pdf" → "PED 3248": a loja já manda o pedido no nome do arquivo."""
+    for nome in nomes:
+        achado = _PEDIDO_NO_NOME.search(str(nome or ""))
+        if achado:
+            return f"PED {achado.group(1).strip('-')}"
+    return ""
+
+
 def _n_despesa(d, ctx):
     d = completar(d, ctx.obra_nome)
     status = status_pagamento(d.get("status_pagamento")) or "Em Aberto"
@@ -427,6 +440,11 @@ def _n_despesa(d, ctx):
         "parcela_frequencia": frequencia if frequencia in FREQ_PARCELA else "mensal",
         "anexos": indices(d.get("anexos"), ctx.arquivos),
     }
+    if not saida["numero_nota"].upper().startswith("PED "):
+        pedido = pedido_no_nome(ctx.arquivos[i].get("nome", "") for i in saida["anexos"]
+                                if 0 <= i < len(ctx.arquivos or []))
+        if pedido:
+            saida["numero_nota"] = pedido   # o pedido vai no lugar da NF
     lista = _parcelas_da_nota(d.get("parcelas_lista"))
     if lista:
         # Datas e valores impressos na nota valem mais que dividir por intervalo.
