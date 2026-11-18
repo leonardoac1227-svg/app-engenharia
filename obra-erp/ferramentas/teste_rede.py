@@ -54,5 +54,27 @@ modo['v4'] = 'sem'; pedidos.clear()
 r = rede._resolver('db.supabase.example', 5432)
 ok(r == ENDERECO_V6, 'nome só com IPv6 (banco) continua funcionando', (r, pedidos))
 
+print('== UMA CONEXÃO SEGURA PARA TODAS AS CHAMADAS ==')
+import ssl, urllib.request
+rede._original = socket.getaddrinfo.__wrapped__ if hasattr(socket.getaddrinfo, '__wrapped__') else rede._original
+criados = []
+original_ssl = ssl.SSLContext.__new__
+rede.instalar()
+ok(urllib.request._opener is not None, 'opener global instalado')
+handler = next(h for h in urllib.request._opener.handlers if isinstance(h, urllib.request.HTTPSHandler))
+ok(isinstance(handler._context, ssl.SSLContext), 'HTTPS usa o contexto criado na partida')
+class Espiao(ssl.SSLContext):
+    pass
+ssl.SSLContext = Espiao
+def conta(*a, **k):
+    criados.append(1)
+    return original_ssl(*a, **k)
+Espiao.__new__ = conta
+try:
+    urllib.request.urlopen('https://127.0.0.1:9/', timeout=0.5)
+except Exception:
+    pass
+ok(criados == [], 'urlopen não cria contexto SSL novo a cada chamada', len(criados))
+
 print('\n' + ('REDE OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

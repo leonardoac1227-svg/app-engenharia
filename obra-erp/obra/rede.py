@@ -64,8 +64,19 @@ def _resolver(host, port, family=0, type=0, proto=0, flags=0):
 
 
 def instalar() -> None:
-    """Vale para o processo inteiro: urllib (Telegram, Gemini, Supabase Storage)."""
+    """Vale para o processo inteiro: urllib (Telegram, Gemini, Supabase Storage).
+
+    Também cria UMA conexão segura (contexto SSL) para todas as chamadas. Sem
+    isso, cada `urlopen` montava um contexto novo, e no servidor (Python 3.14)
+    essa montagem travava dentro de `SSLContext.__new__`: a chamada ao Telegram
+    parava ali, a seguinte esperava atrás dela e o processo inteiro congelava.
+    """
     global _instalado
     if not _instalado:
+        import ssl
+        import urllib.request
         socket.getaddrinfo = _resolver
+        contexto = ssl.create_default_context()
+        urllib.request.install_opener(urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=contexto)))
         _instalado = True
