@@ -335,6 +335,18 @@ def _n_funcionario(d, ctx):
             "desde": data_ou(d.get("data"), ctx.referencia), **_vinculo_dito(d)}
 
 
+def _falta_no_cadastro(d: dict) -> str:
+    """O que ainda falta dizer para a pessoa ter valor na planilha."""
+    from .mao_de_obra import condicoes
+    faltas = [] if d.get("funcao") else ["função"]
+    if not d.get("vinculo"):
+        faltas.append("se é fichado ou avulso")
+    elif not condicoes(d)["definido"]:
+        faltas.append("a diária" if d["vinculo"] == "avulso" else "se é servente prático ou comum"
+                      if d.get("funcao") else "a classe na tabela")
+    return " e ".join(faltas)
+
+
 def _vinculo_dito(d: dict) -> dict:
     """Fichado/avulso, classe e diária, só o que foi dito. Diária dita sem vínculo é de avulso."""
     from .mao_de_obra import TABELA, VINCULOS
@@ -373,7 +385,8 @@ _registrar(TipoAcao(
     "classe (pedreiro|servente_pratico|servente_comum), diaria (valor combinado, só avulso)",
     _n_funcionario, _e_funcionario,
     lambda d: f"Cadastrado: {d['nome']}" + (f" ({d['funcao']})" if d.get("funcao") else "")
-    + (f" · {_texto_vinculo(d)}" if _texto_vinculo(d) else ""),
+    + (f" · {_texto_vinculo(d)}" if _texto_vinculo(d) else "")
+    + (f" · falta dizer {_falta_no_cadastro(d)}" if _falta_no_cadastro(d) else ""),
     permissao="gestor",
     quando="pessoa nova citada que não está na equipe (crie junto com o ponto dela)"))
 

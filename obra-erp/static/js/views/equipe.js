@@ -151,7 +151,7 @@ function abrirFormularioProfissional(funcionario = null) {
 
     <label class="field-label">Diária em R$ (só avulso)</label>
     <input type="number" id="fnDiaria" min="0" step="0.01" inputmode="decimal"
-           value="${funcionario?.diaria ? esc(funcionario.diaria) : ''}" placeholder="100,00">
+           value="${funcionario?.diaria ? esc(funcionario.diaria) : ''}" placeholder="pedreiro e carpinteiro: 140 se vazio">
 
     <label class="field-label">CPF (opcional)</label>
     <input type="text" id="fnDocumento" value="${esc(funcionario?.documento || '')}"

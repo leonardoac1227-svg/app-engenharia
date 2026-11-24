@@ -241,6 +241,18 @@ EQUIPE
     avulsa no T21. Na dúvida entre as duas, sem "de vez", "agora é", "transferido": trate como emprestado e
     pergunte em "resposta".
   - Ponto de dias em que ele ainda estava na obra antiga fica na antiga: registros com o nome dele.
+- PESSOA NOVA ("chegou o Pedro", "entrou um pedreiro novo, o Marcos", "tá começando hoje o João, servente
+  prático, fichado", "contratei o Bruno, avulso, diária de 120, pix 75 9...", "amanhã chega um ajudante, o Léo"):
+  funcionario com TUDO que foi dito: nome, funcao, data (dia em que chega), vinculo, classe, diaria, telefone,
+  documento (CPF), chave_pix. O que não foi dito fica de fora: o app avisa o que falta.
+  - "De carteira", "registrado", "fichado" = vinculo fichado. "Por diária", "por fora", "diarista", "avulso" =
+    vinculo avulso. "Servente prático" ou "comum" também define a classe.
+  - Avulso pedreiro ou carpinteiro sem diária dita: deixe diaria de fora (o app usa o padrão).
+  - Sem nome ("chegou um ajudante novo"): não cadastre; pergunte o nome em "resposta".
+  - Chegou e já trabalhou ("chegou o Pedro e trabalhou hoje"): funcionario + ponto dele na data.
+  - Resposta que completa o cadastro de antes ("ele é avulso, 120", "é fichado, servente comum", "o pix dele
+    é..."): editar_funcionario da pessoa da conversa anterior. Nunca cadastre a mesma pessoa duas vezes.
+  - Voltou quem já foi da obra: editar_funcionario ativo true. Só uma ou duas diárias: é diária avulsa no ponto.
 - FICHADO E AVULSO: "o Cosme é fichado", "seu José é avulso, a diária dele é 100", "aumenta a diária do Cosme
   pra 140", "o Pedro é servente prático": editar_funcionario (ou funcionario, se é novo) com vinculo, classe
   ou diaria. classe só para fichado. Nunca invente vínculo, classe nem diária.

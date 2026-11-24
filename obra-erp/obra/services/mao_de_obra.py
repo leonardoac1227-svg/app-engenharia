@@ -8,7 +8,8 @@ Dois vínculos:
   encargos do dia são cobrados inteiros. Falta o dia todo sem justificativa:
   só os encargos. Falta o dia todo com justificativa: diária cheia.
 - **Avulso**: a diária combinada com a pessoa, na proporção das horas. Não tem
-  encargos e não recebe falta.
+  encargos e não recebe falta. Pedreiro e carpinteiro sem diária combinada usam
+  o padrão de `DIARIA_AVULSO`.
 
 Quem não tem valor definido aparece como "a definir" e fica fora do total: o
 app não adivinha o que vai ser cobrado.
@@ -27,6 +28,8 @@ TABELA = {
     "servente_comum": {"nome": "Servente comum", "liquido": 86.89, "encargos": 94.00},
 }
 VINCULOS = ("fichado", "avulso")
+# Diária do avulso quando ninguém combinou outra. Só para pedreiro e carpinteiro.
+DIARIA_AVULSO = {"pedreiro": 140.0}
 
 
 def _chave(texto) -> str:
@@ -39,6 +42,8 @@ def classe_da_funcao(funcao) -> str:
     chave = _chave(funcao)
     if "pedreiro" in chave or "carpinteiro" in chave:
         return "pedreiro"
+    if chave == "pratico":
+        return "servente_pratico"
     if "servente" in chave or "ajudante" in chave:
         if "pratico" in chave:
             return "servente_pratico"
@@ -51,7 +56,8 @@ def condicoes(f: dict) -> dict:
     """{"vinculo", "liquido", "encargos", "definido"} de uma pessoa."""
     vinculo = f.get("vinculo") or ("avulso" if f.get("avulso") else "fichado")
     if vinculo == "avulso":
-        diaria = float(f.get("diaria") or 0)
+        classe = f.get("classe") or classe_da_funcao(f.get("funcao"))
+        diaria = float(f.get("diaria") or 0) or DIARIA_AVULSO.get(classe, 0.0)
         return {"vinculo": "avulso", "liquido": diaria, "encargos": 0.0, "definido": diaria > 0}
     valores = TABELA.get(f.get("classe") or classe_da_funcao(f.get("funcao")))
     if not valores:

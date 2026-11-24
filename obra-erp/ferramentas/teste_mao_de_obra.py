@@ -163,6 +163,28 @@ with app.app_context():
     ctx = cat.Contexto(I19, HOJE, True, True, [])
     ok(cat.casar_funcionario('Zé', ctx.funcionarios) == 0, 'dois Josés: não escolhe por conta própria')
 
+print('== PESSOA NOVA E DIÁRIA PADRÃO ==')
+cond = mao_de_obra.condicoes
+ok(cond({'vinculo': 'avulso', 'funcao': 'Pedreiro', 'diaria': 0})['liquido'] == 140
+   and cond({'vinculo': 'avulso', 'funcao': 'Carpinteiro'})['liquido'] == 140, 'pedreiro e carpinteiro avulso: R$ 140 por padrão')
+ok(cond({'vinculo': 'avulso', 'funcao': 'Pedreiro', 'diaria': 160})['liquido'] == 160, 'diária combinada vale mais que o padrão')
+ok(not cond({'vinculo': 'avulso', 'funcao': 'Servente'})['definido'], 'servente avulso não tem padrão')
+ok(cond({'vinculo': 'fichado', 'funcao': 'Pratico'})['liquido'] == 90, 'função "Pratico" é servente prático')
+def cadastrar(**dados):
+    with app.app_context():
+        ctx = cat.Contexto(T21, HOJE, True, True, [])
+        a, _ = cat.normalizar([{'tipo': 'funcionario', 'dados': dados}], ctx)
+    return a[0]
+a = cadastrar(nome='Bruno', funcao='Servente', vinculo='avulso', diaria=120, chave_pix='759', data='2026-08-19')
+ok(a['dados']['desde'] == '2026-08-19' and a['dados']['diaria'] == 120 and 'falta' not in a['descricao'],
+   'tudo dito de uma vez', a)
+ok('falta dizer se é fichado ou avulso' in cadastrar(nome='Pedro', funcao='Pedreiro')['descricao'], 'avisa o vínculo que falta')
+ok('falta dizer função e se é fichado ou avulso' in cadastrar(nome='Pedro')['descricao'], 'avisa função e vínculo')
+ok('falta dizer a diária' in cadastrar(nome='Léo', funcao='Ajudante', vinculo='avulso')['descricao'], 'avisa a diária')
+ok('prático ou comum' in cadastrar(nome='João', funcao='Servente', vinculo='fichado')['descricao'], 'avisa a classe')
+ok('falta' not in cadastrar(nome='Marcos', funcao='Carpinteiro', vinculo='avulso')['descricao'], 'carpinteiro avulso já tem padrão')
+ok('PESSOA NOVA' in assistente.PROMPT_BASE, 'regra de pessoa nova no prompt')
+
 print('== PONTO ATÉ HOJE ==')
 d = lambda *n: [(SEGUNDA + timedelta(days=i)).isoformat() for i in n]
 TER, QUI, DOM = d(1)[0], d(3)[0], d(6)[0]

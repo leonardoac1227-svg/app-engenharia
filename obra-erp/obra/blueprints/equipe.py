@@ -52,6 +52,8 @@ def listar(obra_id: int):
         if gestor:
             linha["vinculo"] = cond["vinculo"]
             linha["definido"] = cond["definido"]
+            if cond["vinculo"] == "avulso":
+                linha["diaria"] = cond["liquido"]
     return jsonify(linhas)
 
 
