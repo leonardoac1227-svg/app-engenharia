@@ -46,6 +46,7 @@ log = logging.getLogger(__name__)
 
 EM_SEGUNDO_PLANO = True      # os testes desligam para rodar tudo na mesma thread
 ATRASO_LOTE = 3.0            # segundos esperando o resto das fotos do mesmo envio
+ATRASO_CURTO = 0.8           # mensagem sozinha: só o bastante para o encaminhado com comentário
 ATRASO_FOTO = 30             # segundos esperando o áudio que explica a foto; None desliga
 PRAZO_IA = 150              # segundos: no bot não há limite do gunicorn
 VALIDADE_FILA = timedelta(hours=1)        # arquivo esperando instrução
@@ -74,7 +75,7 @@ AJUDA = """Sou o assistente da obra e faço tudo que o app faz. Fale do jeito qu
 
 Pode mandar só a foto: eu analiso sozinho. Se quiser explicar, mande o áudio ou texto logo depois (ou na legenda).
 
-/obra — obra padrão · /relatorio — PDF da semana · /teste — testar a IA · /ajuda"""
+/obra — obra padrão · /relatorio — PDF da semana · /teste — testar a IA · /comparar — comparar as IAs · /ajuda"""
 
 
 # ---------------------------------------------------------------- vínculo
@@ -223,7 +224,10 @@ def receber(app, update: dict) -> None:
         # Renova a fila: o temporizador da foto não pode correr na frente da instrução.
         executar("UPDATE telegram_arquivos SET criado_em = ? WHERE chat_id = ? AND lote = ''",
                  (agora_iso(), chat_id))
-        _em_segundo_plano(app, processar, chat_id, texto_msg)
+        na_fila = um("SELECT COUNT(*) AS n FROM telegram_arquivos WHERE chat_id = ? AND lote = ''",
+                     (chat_id,))["n"]
+        curto = not msg.get("media_group_id") and na_fila <= 1
+        _em_segundo_plano(app, processar, chat_id, texto_msg, "", True, curto)
         return
 
     # Arquivo sem instrução: avisa uma vez por envio, não uma vez por foto.
@@ -277,6 +281,8 @@ def tratar_comando(app, chat_id: str, comando: str) -> None:
         _comando_obra(app, chat_id, v, argumento)
     elif nome == "/teste":
         _comando_teste(chat_id)
+    elif nome == "/comparar":
+        _comando_comparar(chat_id, v)
     elif nome == "/relatorio":
         _comando_relatorio(app, chat_id, v, argumento)
     elif nome == "/desconectar":
@@ -295,6 +301,19 @@ def _comando_teste(chat_id: str) -> None:
     linhas = [("✅" if r["ok"] else "❌") + f" {r['provedor']} · {r['modelo']}: "
               + (f"respondeu em {r['ms'] / 1000:.1f}s" if r["ok"] else r["erro"]) for r in resultados]
     telegram_api.enviar(chat_id, "Teste da IA:\n" + "\n".join(linhas))
+
+
+def _comando_comparar(chat_id: str, v: dict) -> None:
+    from . import comparar_ia
+    if v["papel"] != "gestor":
+        telegram_api.enviar(chat_id, "Somente o gestor compara as IAs.")
+        return
+    if len(ia_provedores.provedores_configurados()) < 2:
+        telegram_api.enviar(chat_id, "Só há uma IA configurada. Salve a ANTHROPIC_API_KEY no servidor para comparar.")
+        return
+    telegram_api.enviar(chat_id, "⏳ Comparando as IAs com notas já lançadas. Leva alguns minutos e não grava nada.")
+    obras = obras_do_usuario(v["usuario_id"], v["papel"])
+    telegram_api.enviar(chat_id, comparar_ia.resumo(comparar_ia.comparar(obras)))
 
 
 def _comando_obra(app, chat_id: str, v: dict, argumento: str) -> None:
@@ -399,10 +418,11 @@ def _arquivos_para_pendente(acao: dict, arquivos: list[dict]) -> tuple[dict, lis
 
 # ---------------------------------------------------------------- processamento
 
-def processar(app, chat_id: str, texto_msg: str, lote: str = "", esperar: bool = True) -> None:
+def processar(app, chat_id: str, texto_msg: str, lote: str = "", esperar: bool = True,
+              curto: bool = False) -> None:
     log.info("Telegram %s: mensagem recebida, processando", chat_id)
     if esperar and ATRASO_LOTE:
-        time.sleep(ATRASO_LOTE)
+        time.sleep(min(ATRASO_LOTE, ATRASO_CURTO) if curto else ATRASO_LOTE)
     if not vinculo(chat_id):
         return
 

@@ -20,6 +20,7 @@ sempre — com as mesmas travas dos formulários.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import date, timedelta
 import time
@@ -30,6 +31,8 @@ from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
 from . import boleto, ia_provedores, padroes
 from .parcelamento import dia_de_pagar
+
+log = logging.getLogger(__name__)
 
 MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
@@ -364,9 +367,21 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
         return ""
     nomes = [o["nome"] for o in obras] + [n for equipe in _equipes(obras).values() for n in equipe]
     liberar_leitura()
+    inicio = time.monotonic()
+    if config.XAI_API_KEY:
+        termos = list(dict.fromkeys(nomes + [oficial for _, oficial in padroes.FORNECEDORES]))
+        try:
+            partes = [ia_provedores.transcrever_xai(a, termos, prazo - (time.monotonic() - inicio))
+                      for a in audios]
+            if all(partes):
+                return texto("\n".join(partes), 6000)
+            log.warning("Grok não ouviu fala no áudio; tentando o Gemini")
+        except ia_provedores.FalhaProvedor as erro:
+            log.warning("Grok falhou (%s); tentando o Gemini", erro)
     bruto, _ = ia_provedores.gerar(
         PROMPT_TRANSCRICAO.replace("{nomes}", ", ".join(dict.fromkeys(nomes))),
-        "Transcreva os áudios.", audios, None, max_tokens=4096, pensar="minimo", prazo=prazo)
+        "Transcreva os áudios.", audios, None, max_tokens=4096, pensar="minimo",
+        prazo=max(prazo - (time.monotonic() - inicio), 15))
     transcricao = texto(bruto, 6000)
     if not transcricao or catalogo.sem_acento(transcricao).strip(" .") == "inaudivel":
         raise ApiErro("Não consegui entender o áudio. Grave de novo, mais perto do microfone, "

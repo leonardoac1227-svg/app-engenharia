@@ -153,7 +153,7 @@ r = perguntar()
 ok(r.status_code == 503 and r.get_json()['codigo'] == 'ia_indisponivel', 'sem chave: 503 com explicação', r.get_json())
 
 print('== INTERPRETAÇÃO (UMA CHAMADA) ==')
-config.GEMINI_API_KEY = 'g'; config.ANTHROPIC_API_KEY = 'a'
+config.GEMINI_API_KEY = 'g'; config.ANTHROPIC_API_KEY = 'a'; config.IA_ORDEM = ['gemini', 'anthropic']
 respostas['gemini'] = '```json\n' + json.dumps(PROPOSTA) + '\n```'
 n0 = len(chamadas)
 r = perguntar(arquivos=[('nota.jpg', JPG), ('laje.png', b"\x89PNG\r\n\x1a\n" + b"\x00" * 40), ('nota.pdf', PDF)])
@@ -400,9 +400,11 @@ class ClienteFalso:
         return R()
 anthropic.Anthropic = ClienteFalso
 config.IA_ORDEM = ['anthropic']; config.ANTHROPIC_API_KEY = 'a'
+ok(config.ANTHROPIC_MODEL == 'claude-haiku-5-5', 'Claude: o padrão é o Haiku', config.ANTHROPIC_MODEL)
+config.ANTHROPIC_MODEL = 'claude-opus-5-5'
 res, fonte = ip.gerar('s', 't', [{'nome': 'n.pdf', 'mime': 'application/pdf', 'dados': PDF}], {'type': 'object'})
 ok(res == {'ok': True} and capturado['model'] == 'claude-opus-5-5' and capturado['fallbacks'] == 'default',
-   'Claude: modelo padrão com reserva do servidor')
+   'Claude Opus: com reserva do servidor')
 ok('format' not in capturado['output_config'] and 'temperature' not in capturado
    and capturado['messages'][0]['content'][0]['type'] == 'document', 'Claude: JSON pelo prompt, PDF como documento')
 try:

@@ -236,7 +236,10 @@ def create_app() -> Flask:
             "Veja SUPABASE.md.", config.UPLOAD_DIR)
 
     from .services import ia_provedores
+    ia_provedores.preparar()   # cliente do Claude criado aqui, fora das threads do bot
     provedores = ia_provedores.provedores_configurados()
+    if provedores:
+        app.logger.info("Áudio: %s", "Grok → Gemini" if config.XAI_API_KEY else "Gemini")
     app.logger.info("Assistente de IA: %s", " → ".join(provedores) if provedores
                     else "desligado (sem GEMINI_API_KEY nem ANTHROPIC_API_KEY)")
 

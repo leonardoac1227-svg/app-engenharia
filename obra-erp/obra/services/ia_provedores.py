@@ -1,16 +1,19 @@
 # -*- coding: utf-8 -*-
-"""Provedores de IA — Gemini (gratuito) primeiro, Claude (pago) como reserva opcional.
+"""Provedores de IA — Claude primeiro, Gemini de reserva, Grok para áudio.
 
 Todo pedido de IA do app passa por aqui. Quem chama entrega um prompt de
 sistema, o texto do usuário e, se houver, arquivos (foto, PDF de nota, áudio).
 
 Como cada pedido é atendido:
 
-1. **Gemini, modelo principal** (`GEMINI_MODEL`, padrão Flash-Lite: o mais
-   rápido da camada gratuita, bom em ler cupom e ouvir áudio).
-2. **Gemini, modelo reserva** (`GEMINI_MODELO_RESERVA`, padrão Flash) se o
+1. **Claude** (`ANTHROPIC_MODEL`), se houver `ANTHROPIC_API_KEY`: texto, foto e PDF.
+2. **Gemini, modelo principal** (`GEMINI_MODEL`, padrão Flash-Lite), se o Claude
+   falhar ou não ler o formato (HEIC do iPhone).
+3. **Gemini, modelo reserva** (`GEMINI_MODELO_RESERVA`, padrão Flash) se o
    principal demorar, estourar a cota (que é contada por modelo) ou falhar.
-3. **Claude**, só se houver `ANTHROPIC_API_KEY` (pago; não ouve áudio).
+
+Áudio: o **Grok** (`XAI_API_KEY`) transcreve; sem chave ou se falhar, o Gemini.
+A ordem muda com `IA_ORDEM`.
 
 Tudo dentro de um **prazo total** por pedido: o bot do Telegram pode esperar
 mais; a tela não pode passar do limite do gunicorn.
@@ -22,6 +25,7 @@ biblioteca padrão e o SDK `anthropic` só é importado se a chave existir.
 from __future__ import annotations
 
 import base64
+import contextlib
 import http.client
 import json
 import logging
@@ -30,6 +34,7 @@ import threading
 import time
 import urllib.error
 import urllib.request
+import uuid
 
 from .. import config
 
@@ -38,6 +43,11 @@ log = logging.getLogger(__name__)
 GEMINI_URL = "https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent"
 TEMPO_MAXIMO_TENTATIVA = 45   # segundos por modelo
 PRAZO_PADRAO = 100            # segundos por pedido (a tela: o gunicorn corta em 120)
+TEMPO_CLAUDE_COM_RESERVA = 40  # o Gemini ainda precisa caber no prazo se o Claude travar
+XAI_STT_URL = "https://api.x.ai/v1/stt"
+XAI_STT_MODELO = "grok-voice-transcribe-2.0"
+XAI_MAXIMO_TERMOS, XAI_TAMANHO_TERMO = 100, 50   # limites da API para "keyterm"
+TEMPO_XAI = 20
 ERROS_DE_REDE = (urllib.error.URLError, TimeoutError, ConnectionError, http.client.HTTPException)
 # Falhas em que vale tentar o outro modelo: o problema é daquele modelo, não da chave.
 CODIGOS_TROCA_MODELO = {404, 408, 429, 500, 502, 503, 504}
@@ -136,6 +146,16 @@ def descrever_falha(erro: Exception) -> str:
 def provedores_configurados() -> list[str]:
     chaves = {"gemini": config.GEMINI_API_KEY, "anthropic": config.ANTHROPIC_API_KEY}
     return [p for p in config.IA_ORDEM if chaves.get(p)]
+
+
+@contextlib.contextmanager
+def somente(provedor: str):
+    """Nesta thread, só este provedor responde (comparação: a reserva esconderia quem falhou)."""
+    _local.somente = provedor
+    try:
+        yield
+    finally:
+        _local.__dict__.pop("somente", None)
 
 
 def disponivel() -> bool:
@@ -263,10 +283,42 @@ def _chamar_gemini(sistema: str, texto: str, arquivos: list[dict], esquema: dict
 
 # ---------------------------------------------------------------- Claude
 
+_cliente_claude: tuple | None = None
+_trava_cliente = threading.Lock()
+
+
+def cliente_claude():
+    """Um cliente para o processo inteiro.
+
+    Cada cliente novo monta um contexto SSL próprio, e no servidor (Python 3.14)
+    essa montagem dentro de uma thread travava o processo. `preparar()` cria o
+    cliente na partida, fora das threads do bot.
+    """
+    global _cliente_claude
+    import anthropic  # importado só aqui: sem chave, o app nem precisa do pacote
+    marca = (config.ANTHROPIC_API_KEY, anthropic.Anthropic)
+    with _trava_cliente:
+        if _cliente_claude is None or _cliente_claude[0] != marca:
+            _cliente_claude = (marca, anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY, max_retries=0))
+        return _cliente_claude[1]
+
+
+def preparar() -> None:
+    if config.ANTHROPIC_API_KEY:
+        try:
+            cliente_claude()
+        except Exception as erro:  # noqa: BLE001 — sem o Claude, o app sobe com o Gemini
+            log.warning("Claude indisponível: %r", erro)
+
+
+def le_todos(provedor: str, arquivos: list[dict]) -> bool:
+    """O provedor lê todos os arquivos? O que ele ignorasse viraria resposta sem ter visto a nota."""
+    aceitos = MIME_GEMINI if provedor == "gemini" else MIME_CLAUDE_IMAGEM | {"application/pdf"}
+    return all(a["mime"] in aceitos for a in arquivos)
+
+
 def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: dict | None,
                       max_tokens: int) -> str:
-    import anthropic  # importado só aqui: sem chave, o app nem precisa do pacote
-
     conteudo = []
     for a in arquivos:
         dados = base64.standard_b64encode(a["dados"]).decode("ascii")
@@ -284,9 +336,11 @@ def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: d
     parametros = {
         "model": config.ANTHROPIC_MODEL,
         "max_tokens": max(max_tokens, 16000),
-        "system": sistema,
+        # As regras não mudam de uma mensagem para outra: do cache, saem mais rápido e mais barato.
+        "system": [{"type": "text", "text": sistema, "cache_control": {"type": "ephemeral"}}],
         "messages": [{"role": "user", "content": conteudo}],
-        "output_config": {"effort": "low" if getattr(_local, "pensar", "baixo") == "minimo" else "medium"},
+        "output_config": {"effort": "low" if getattr(_local, "pensar", "baixo") == "minimo"
+                          else config.ANTHROPIC_ESFORCO},
     }
     if config.ANTHROPIC_MODEL in MODELOS_COM_RESERVA:
         # Se um filtro de segurança recusar por engano, o próprio servidor
@@ -294,13 +348,52 @@ def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: d
         parametros["betas"] = ["server-side-fallback-2026-07-01"]
         parametros["fallbacks"] = "default"
 
-    cliente = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY,
-                                  timeout=max(min(_restante(), TEMPO_MAXIMO_TENTATIVA), 10), max_retries=1)
-    resposta = cliente.beta.messages.create(**parametros)
+    reserva = "gemini" in provedores_configurados()
+    parametros["timeout"] = max(min(_restante() * (0.6 if reserva else 1.0),
+                                    TEMPO_CLAUDE_COM_RESERVA if reserva else 90), 10)
+    inicio = time.monotonic()
+    resposta = cliente_claude().beta.messages.create(**parametros)
     if resposta.stop_reason == "refusal":
         raise FalhaProvedor("o Claude recusou o pedido")
+    if resposta.stop_reason == "max_tokens":
+        raise FalhaProvedor("a resposta do Claude veio cortada")
     _local.modelo = config.ANTHROPIC_MODEL
+    uso = getattr(resposta, "usage", None)
+    log.info("Claude %s respondeu em %.1fs (tokens: %s novos, %s do cache, %s de saída)",
+             config.ANTHROPIC_MODEL, time.monotonic() - inicio, getattr(uso, "input_tokens", "?"),
+             getattr(uso, "cache_read_input_tokens", "?"), getattr(uso, "output_tokens", "?"))
     return "\n".join(b.text for b in resposta.content if b.type == "text").strip()
+
+
+def transcrever_xai(arquivo: dict, termos: list[str], prazo: float) -> str:
+    """Áudio em texto pelo Grok. `termos`: nomes próprios que ele deve reconhecer."""
+    fronteira = uuid.uuid4().hex
+    campos = [("model", XAI_STT_MODELO), ("language", "pt"), ("format", "true")]
+    unicos = dict.fromkeys(t.strip() for t in termos if t and t.strip() and len(t.strip()) <= XAI_TAMANHO_TERMO)
+    campos += [("keyterm", t) for t in list(unicos)[:XAI_MAXIMO_TERMOS]]
+    corpo = b"".join(f'--{fronteira}\r\nContent-Disposition: form-data; name="{n}"\r\n\r\n{v}\r\n'
+                     .encode("utf-8") for n, v in campos)
+    extensao = arquivo["mime"].split("/")[-1].replace("x-", "").replace("mpeg", "mp3")
+    # O arquivo tem de ser o último campo: o que vem depois dele é ignorado.
+    corpo += (f'--{fronteira}\r\nContent-Disposition: form-data; name="file"; filename="audio.{extensao}"\r\n'
+              f'Content-Type: {arquivo["mime"]}\r\n\r\n').encode("utf-8")
+    corpo += arquivo["dados"] + f"\r\n--{fronteira}--\r\n".encode("ascii")
+    req = urllib.request.Request(XAI_STT_URL, data=corpo, method="POST", headers={
+        "authorization": f"Bearer {config.XAI_API_KEY}",
+        "content-type": f"multipart/form-data; boundary={fronteira}"})
+    inicio = time.monotonic()
+    try:
+        with urllib.request.urlopen(req, timeout=max(min(prazo, TEMPO_XAI), 5)) as resposta:
+            dados = json.loads(resposta.read().decode("utf-8"))
+    except urllib.error.HTTPError as erro:
+        detalhe = erro.read().decode("utf-8", "replace")[:200]
+        motivo = {401: "chave do Grok inválida", 403: "chave do Grok sem permissão ou sem crédito",
+                  429: "limite do Grok atingido"}.get(erro.code, f"HTTP {erro.code}")
+        raise FalhaProvedor(motivo, erro.code, detalhe) from erro
+    except (*ERROS_DE_REDE, ValueError) as erro:
+        raise FalhaProvedor(f"sem resposta do Grok: {erro}", rede=True) from erro
+    log.info("Grok transcreveu em %.1fs", time.monotonic() - inicio)
+    return str((dados or {}).get("text") or "").strip()
 
 
 CHAMADAS = {"gemini": _chamar_gemini, "anthropic": _chamar_anthropic}
@@ -334,6 +427,8 @@ def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
     """
     arquivos = arquivos or []
     provedores = provedores_configurados()
+    if getattr(_local, "somente", ""):
+        provedores = [p for p in provedores if p == _local.somente]
     if not provedores:
         raise IaIndisponivel(
             "Assistente de IA desligado: configure GEMINI_API_KEY (gratuita) no servidor.")
@@ -341,8 +436,10 @@ def gerar(sistema: str, texto: str, arquivos: list[dict] | None = None,
         # O Claude ignoraria o áudio e responderia sem ouvi-lo: melhor falhar.
         provedores = [p for p in provedores if p == "gemini"]
         if not provedores:
-            raise IaIndisponivel("Para entender áudio é preciso a GEMINI_API_KEY. "
-                                 "Mande a mensagem por texto.")
+            raise IaIndisponivel("Não consegui transcrever o áudio: para isso é preciso a XAI_API_KEY "
+                                 "ou a GEMINI_API_KEY. Mande a mensagem por texto.")
+    # Quem não lê algum dos arquivos fica para o fim (só responde se não houver outro).
+    provedores = sorted(provedores, key=lambda p: not le_todos(p, arquivos))
 
     _local.pensar = pensar
     _local.limite = time.monotonic() + prazo
@@ -371,6 +468,19 @@ def modelo_usado() -> str:
     return getattr(_local, "modelo", "")
 
 
+def _silencio() -> bytes:
+    """Um segundo de áudio mudo: prova a chave do Grok sem gastar com fala."""
+    import io
+    import wave
+    saida = io.BytesIO()
+    with wave.open(saida, "wb") as som:
+        som.setnchannels(1)
+        som.setsampwidth(2)
+        som.setframerate(16000)
+        som.writeframes(b"\x00" * 32000)
+    return saida.getvalue()
+
+
 def testar() -> list[dict]:
     """Pedido mínimo a cada modelo configurado: diz se responde e em quanto tempo."""
     alvos = []
@@ -378,6 +488,8 @@ def testar() -> list[dict]:
         alvos += [("Gemini", m) for m in modelos_gemini()]
     if config.ANTHROPIC_API_KEY and "anthropic" in config.IA_ORDEM:
         alvos.append(("Claude", config.ANTHROPIC_MODEL))
+    if config.XAI_API_KEY:
+        alvos.append(("Grok", XAI_STT_MODELO))
 
     resultados = []
     for nome, modelo in alvos:
@@ -388,6 +500,8 @@ def testar() -> list[dict]:
             if nome == "Gemini":
                 resposta = _gemini_modelo(modelo, "Responda só com a palavra: ok",
                                           [{"text": "teste de conexão"}], None, 256, 35)
+            elif nome == "Grok":
+                resposta = transcrever_xai({"mime": "audio/wav", "dados": _silencio()}, [], 10) or "ok"
             else:
                 resposta = _chamar_anthropic("Responda só com a palavra: ok", "teste de conexão", [], None, 256)
             resultados.append({"provedor": nome, "modelo": modelo, "ok": True,

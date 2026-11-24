@@ -586,11 +586,13 @@ não é usada para treino) ou use `IA_ORDEM=anthropic`.
 | Variável | Para quê |
 |---|---|
 | `GEMINI_API_KEY` | liga o assistente com o Gemini gratuito |
-| `ANTHROPIC_API_KEY` | Claude pago, reserva (ou principal, sem Gemini) |
+| `ANTHROPIC_API_KEY` | Claude pago: atende texto, foto e PDF; o Gemini fica de reserva |
+| `ANTHROPIC_ESFORCO` | `low` (padrão), `medium` ou `high` |
+| `XAI_API_KEY` | Grok (xAI): transcreve os áudios; o Gemini fica de reserva |
 | `GEMINI_MODEL` | principal, padrão `gemini-flash-lite-latest` |
 | `GEMINI_MODELO_RESERVA` | reserva, padrão `gemini-flash-latest` |
-| `ANTHROPIC_MODEL` | padrão `claude-opus-5-5`; `claude-haiku-5-5` sai bem mais barato |
-| `IA_ORDEM` | padrão `gemini,anthropic` |
+| `ANTHROPIC_MODEL` | padrão `claude-haiku-5-5`, o mais rápido e barato |
+| `IA_ORDEM` | padrão `anthropic,gemini` |
 | `IA_LIMITE_HORA` | pedidos por usuário por hora, padrão 60 |
 
 ---

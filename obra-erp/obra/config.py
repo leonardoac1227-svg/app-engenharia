@@ -18,10 +18,12 @@ GEMINI_API_KEY  Chave gratuita do Google AI Studio. Liga o assistente de IA
                 (relatório diário, leitura de notas fiscais, lançamentos por voz).
 GEMINI_MODEL    Modelo principal do Gemini (padrão: gemini-flash-lite-latest, o mais rápido).
 GEMINI_MODELO_RESERVA  Modelo usado se o principal demorar ou falhar (padrão: gemini-flash-latest).
-ANTHROPIC_API_KEY  API paga do Claude. Reserva quando o Gemini falha ou estoura o
-                limite gratuito — e principal se não houver chave do Gemini.
-ANTHROPIC_MODEL Modelo do Claude (padrão: claude-opus-5-5).
-IA_ORDEM        Ordem de tentativa dos provedores (padrão: gemini,anthropic).
+ANTHROPIC_API_KEY  API paga do Claude. Com ela, o Claude atende texto, foto e PDF
+                e o Gemini fica de reserva.
+ANTHROPIC_MODEL Modelo do Claude (padrão: claude-haiku-5-5, o mais rápido e barato).
+ANTHROPIC_ESFORCO  Quanto o Claude pensa: low (padrão, o mais rápido), medium ou high.
+XAI_API_KEY     Grok (xAI): transcreve os áudios. Sem ela, ou se falhar, o Gemini transcreve.
+IA_ORDEM        Ordem de tentativa dos provedores (padrão: anthropic,gemini).
 IA_LIMITE_HORA  Pedidos ao assistente por usuário, por hora (padrão 60).
 TELEGRAM_BOT_TOKEN  Token do bot criado no @BotFather. Liga o bot do Telegram.
 TELEGRAM_WEBHOOK_SECRET  Segredo do webhook (padrão: derivado da SECRET_KEY).
@@ -97,15 +99,20 @@ ADMIN_NOME = os.environ.get("ADMIN_NOME", "Gestor")
 
 # ---------------------------------------------------------------- inteligência artificial
 #
-# Gemini primeiro (camada gratuita do Google), Claude como reserva paga. Sem
-# nenhuma das duas chaves o app funciona igual — só o assistente fica desligado.
+# Claude primeiro (pago), Gemini de reserva (gratuito); áudio pelo Grok. Cada um
+# só entra se a chave dele existir. Sem Claude nem Gemini o app funciona igual —
+# só o assistente fica desligado.
 
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-opus-5-5"
+ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "").strip() or "claude-haiku-5-5"
+ANTHROPIC_ESFORCO = os.environ.get("ANTHROPIC_ESFORCO", "").strip().lower()
+if ANTHROPIC_ESFORCO not in ("low", "medium", "high"):
+    ANTHROPIC_ESFORCO = "low"
+XAI_API_KEY = os.environ.get("XAI_API_KEY", "").strip()
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "").strip() or "gemini-flash-lite-latest"
 GEMINI_MODELO_RESERVA = (os.environ.get("GEMINI_MODELO_RESERVA") or "gemini-flash-latest").strip()
-IA_ORDEM = [p.strip().lower() for p in (os.environ.get("IA_ORDEM") or "gemini,anthropic").split(",")
+IA_ORDEM = [p.strip().lower() for p in (os.environ.get("IA_ORDEM") or "anthropic,gemini").split(",")
             if p.strip()]
 try:
     IA_LIMITE_HORA = max(int(os.environ.get("IA_LIMITE_HORA", "60")), 1)
