@@ -201,6 +201,10 @@ EXEMPLOS = (
     ('"Nota da Somar, aço pra laje do O13" + NF 5521 que traz "Pedido: 48213" no cabeçalho',
      'despesa: "Aço para laje", fornecedor "Somar", numero_nota "PED 48213" (o pedido, não a NF), '
      'valor = total da nota, Em Aberto, Material, anexos [0]'),
+    ('"ó, é... comprei aqui um negócio de hidráulica, tipo, pra piscina do... do I19, não, do O13" + NF da Inova '
+     'com "Pedido 3301"',
+     'despesa na O13: itens da nota + "para piscina", "Inova civil", valor = total da nota, '
+     'numero_nota "PED 3301", Em Aberto, Material, anexos [0]'),
     ('"e o frete disso" (logo depois da nota acima)',
      'despesa: "Frete referente a espaçadores para assentamento de porcelanato da piscina", Diego motoboy, '
      '30, Em Aberto, Frete'),

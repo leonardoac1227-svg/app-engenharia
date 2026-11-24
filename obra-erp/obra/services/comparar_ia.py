@@ -15,6 +15,7 @@ import os
 import statistics
 import time
 
+from .. import config
 from ..db import liberar_leitura, todos
 from ..utils import bytes_anexo, hoje_iso
 from . import acoes as catalogo
@@ -49,11 +50,15 @@ def _notas(obras: list[dict], quantas: int) -> list[dict]:
     return escolhidas[:quantas]
 
 
+SEM_RACIOCINIO = "anthropic-sem-raciocinio"
+NOMES = {**ia_provedores.NOMES, SEM_RACIOCINIO: "Claude sem raciocínio"}
+
+
 def _ler(provedor: str, nota: dict, dados: bytes, obras: list[dict]) -> dict:
     arquivo = {"nome": "nota" + os.path.splitext(nota["arquivo"])[1], "mime": nota["mime"], "dados": dados}
     inicio = time.monotonic()
     try:
-        with ia_provedores.somente(provedor):
+        with ia_provedores.somente(provedor.split("-")[0], provedor == SEM_RACIOCINIO):
             r = assistente.interpretar(obras, f"Lança essa nota na obra {nota['obra']['nome']}", hoje_iso(),
                                        [arquivo], [], pode_financeiro=True, pode_gestor=True,
                                        obra_padrao=nota["obra"]["id"], prazo=90)
@@ -73,6 +78,8 @@ def _ler(provedor: str, nota: dict, dados: bytes, obras: list[dict]) -> dict:
 def comparar(obras: list[dict], quantas: int = NOTAS) -> dict:
     """{"notas": n, "resultados": {provedor: [leituras]}}. Só lê; não lança nada."""
     provedores = ia_provedores.provedores_configurados()
+    if "anthropic" in provedores and config.ANTHROPIC_MODEL == "claude-haiku-5-5":
+        provedores = provedores + [SEM_RACIOCINIO]
     lidas, resultados = 0, {p: [] for p in provedores}
     for nota in _notas(obras, quantas):
         dados = bytes_anexo(nota["arquivo"])
@@ -90,7 +97,7 @@ def resumo(dados: dict) -> str:
     linhas = [f"Comparação com {dados['notas']} nota(s) já lançada(s). Nada foi gravado."]
     for provedor, leituras in dados["resultados"].items():
         boas = [x for x in leituras if not x["falhou"]]
-        nome = ia_provedores.NOMES[provedor]
+        nome = NOMES[provedor]
         if not boas:
             linhas.append(f"\n❌ {nome}: não respondeu nenhuma.")
             continue

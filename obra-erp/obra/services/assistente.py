@@ -84,6 +84,20 @@ REGRAS GERAIS
 - Uma ação por coisa a gravar; pode haver várias ações de tipos diferentes.
 - Preencha SEMPRE os campos dentro de "dados" (valor, descricao, fornecedor, numero_nota, anexos...).
   O que você escreve em "resposta" não é gravado: só "dados" vira lançamento.
+- Só escreva os campos que têm valor: campo vazio, zero ou que não se aplica fica fora do JSON.
+  "resposta": uma frase curta. Não repita nela o que já está em "dados".
+- Tabelas do contexto: "colunas" dá o nome de cada posição das "linhas". contas_em_aberto = "outras" mais
+  os lançamentos de lancamentos_recentes cujos ids estão em "ids_que_estao_em_lancamentos_recentes".
+- FALA SOLTA: o usuário fala andando na obra, sem caprichar. Entenda a intenção e complete o resto:
+  - Ignore "é...", "tipo", "né", "aí", repetição e frase pela metade. Se ele se corrige ("no O13, não,
+    no I19"), vale a última versão.
+  - Ordem, gíria e erro de grafia ou de transcrição não importam ("ó treze" = O13, "ítalo" = Hitalo,
+    "inova" = Inova civil).
+  - Com nota junto, basta dizer a obra e para que serve: valor, fornecedor, número do pedido, itens e
+    vencimento você tira do documento. "Comprei um material pra laje do O13" + nota = descrição com os
+    itens da nota e "para laje".
+  - Sem nota, use os PADRÕES DA EMPRESA para o que faltar; o que não der para saber fica de fora (o bot
+    pergunta). Nunca deixe de lançar por a frase estar incompleta.
 - Áudios chegam já transcritos na mensagem do usuário: trate a transcrição como a própria mensagem.
   Áudio nunca vai em "anexos".
 - Execute: gere as ações do que foi dito ou do que está no documento. Não peça por escrito o que dá
@@ -255,6 +269,14 @@ def _semana_da_data(obra_id: int, referencia: str):
     return semana
 
 
+def _tabela(linhas: list[dict]) -> dict:
+    """Lista de registros como tabela: o nome de cada campo vai uma vez só, não em toda linha."""
+    if not linhas:
+        return {"colunas": [], "linhas": []}
+    colunas = list(linhas[0])
+    return {"colunas": colunas, "linhas": [[l[c] if l[c] is not None else "" for c in colunas] for l in linhas]}
+
+
 def _contexto_obra(obra: dict, referencia: str, pode_financeiro: bool) -> dict:
     obra_id = obra["id"]
     ctx = {k: obra.get(k) for k in ("id", "nome", "cliente", "endereco")}
@@ -283,16 +305,22 @@ def _contexto_obra(obra: dict, referencia: str, pode_financeiro: bool) -> dict:
 
     if pode_financeiro:
         # Ordem de gravação, não de data: "o último lançamento" é o último que entrou.
-        ctx["lancamentos_recentes"] = [dict(r) for r in todos(
+        recentes = [dict(r) for r in todos(
             """SELECT x.id, d.data, x.categoria, x.descricao, x.fornecedor, x.valor, x.status_pagamento,
                       x.numero_nota, x.vencimento
                  FROM despesas x JOIN dias d ON d.id = x.dia_id JOIN semanas s ON s.id = d.semana_id
                 WHERE s.obra_id = ? ORDER BY x.id DESC LIMIT 30""", (obra_id,))]
-        ctx["contas_em_aberto"] = [dict(r) for r in todos(
+        abertas = [dict(r) for r in todos(
             """SELECT x.id, d.data, x.descricao, x.fornecedor, x.valor, x.numero_nota, x.vencimento
                  FROM despesas x JOIN dias d ON d.id = x.dia_id JOIN semanas s ON s.id = d.semana_id
                 WHERE s.obra_id = ? AND x.status_pagamento = 'Em Aberto'
                 ORDER BY COALESCE(x.vencimento, d.data) LIMIT 30""", (obra_id,))]
+        # A conta em aberto que já está nos recentes não vai escrita duas vezes: só o id.
+        ja = {r["id"] for r in recentes}
+        ctx["lancamentos_recentes"] = _tabela(recentes)
+        ctx["contas_em_aberto"] = {
+            "ids_que_estao_em_lancamentos_recentes": [a["id"] for a in abertas if a["id"] in ja],
+            "outras": _tabela([a for a in abertas if a["id"] not in ja])}
         if semana:
             total = um("""SELECT COALESCE(SUM(x.valor), 0) AS t,
                                  COALESCE(SUM(CASE WHEN x.status_pagamento = 'Em Aberto' THEN x.valor ELSE 0 END), 0) AS a
@@ -626,7 +654,7 @@ def _obra_da_equipe(acoes: list[dict], obras: list[dict], referencia: str) -> in
 
 
 def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico: list[dict]) -> str:
-    partes = ["CONTEXTO (JSON):", json.dumps(contexto, ensure_ascii=False, default=str)]
+    partes = ["CONTEXTO (JSON):", json.dumps(contexto, ensure_ascii=False, default=str, separators=(",", ":"))]
     if historico:
         partes.append("\nCONVERSA ANTERIOR (mais antiga primeiro):")
         for item in historico[-MAX_HISTORICO:]:

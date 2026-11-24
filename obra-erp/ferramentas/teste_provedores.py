@@ -143,6 +143,30 @@ ok(not r['resultados']['gemini'][0]['valor'] and not r['resultados']['gemini'][0
 ok(ip.gerar('r', 't', [], {'type': 'object'})[1] == 'anthropic', 'depois da comparação, tudo volta ao normal')
 ip.CHAMADAS.update(original)
 
+print('== RACIOCÍNIO E CONTEXTO COMPACTO ==')
+ok('thinking' not in pedidos[-1], 'no dia a dia o Claude raciocina')
+config.ANTHROPIC_MODEL = 'claude-haiku-5-5'
+with ip.somente('anthropic', True):
+    ip.gerar('r', 't', [], {'type': 'object'})
+ok(pedidos[-1].get('thinking') == {'type': 'disabled'}, 'a variante sem raciocínio só na comparação')
+ip.gerar('r', 't', [], {'type': 'object'})
+ok('thinking' not in pedidos[-1], 'depois dela, volta a raciocinar')
+ok(comparar_ia.SEM_RACIOCINIO in r['resultados'], 'a comparação mede as três', list(r['resultados']))
+lancar(status='Em Aberto')
+with app.app_context():
+    ctx = assistente.montar_contexto(obras, '2026-11-24', True, True, [])['obras'][0]
+    from obra.db import todos
+    ids = [x['id'] for x in todos("SELECT x.id FROM despesas x ORDER BY x.id DESC LIMIT 30")]
+    todas_abertas = {x['id'] for x in todos("SELECT id FROM despesas WHERE status_pagamento = 'Em Aberto'")}
+rec, ab = ctx['lancamentos_recentes'], ctx['contas_em_aberto']
+ok([l[rec['colunas'].index('id')] for l in rec['linhas']] == ids, 'os mesmos 30 lançamentos, na mesma ordem')
+ok({'data', 'descricao', 'fornecedor', 'valor', 'status_pagamento', 'numero_nota', 'vencimento'} <= set(rec['colunas']),
+   'nenhum campo perdido', rec['colunas'])
+fora = {l[ab['outras']['colunas'].index('id')] for l in ab['outras']['linhas']}
+dentro = set(ab['ids_que_estao_em_lancamentos_recentes'])
+ok(fora | dentro == todas_abertas and not fora & dentro and fora and dentro, 'toda conta em aberto vai, uma vez só', ab)
+ok('FALA SOLTA' in assistente.PROMPT_BASE, 'regra de fala solta no prompt')
+
 print('== ESPERA DO BOT ==')
 dormidas, chamados = [], []
 bot_telegram.time.sleep = dormidas.append

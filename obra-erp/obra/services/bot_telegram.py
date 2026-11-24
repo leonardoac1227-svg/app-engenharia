@@ -313,7 +313,9 @@ def _comando_comparar(chat_id: str, v: dict) -> None:
         return
     telegram_api.enviar(chat_id, "⏳ Comparando as IAs com notas já lançadas. Leva alguns minutos e não grava nada.")
     obras = obras_do_usuario(v["usuario_id"], v["papel"])
-    telegram_api.enviar(chat_id, comparar_ia.resumo(comparar_ia.comparar(obras)))
+    resultado = comparar_ia.resumo(comparar_ia.comparar(obras))
+    log.info("Comparação das IAs: %s", resultado.replace("\n", " | "))
+    telegram_api.enviar(chat_id, resultado)
 
 
 def _comando_obra(app, chat_id: str, v: dict, argumento: str) -> None:

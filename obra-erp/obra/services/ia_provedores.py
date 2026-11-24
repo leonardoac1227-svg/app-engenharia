@@ -149,13 +149,17 @@ def provedores_configurados() -> list[str]:
 
 
 @contextlib.contextmanager
-def somente(provedor: str):
-    """Nesta thread, só este provedor responde (comparação: a reserva esconderia quem falhou)."""
-    _local.somente = provedor
+def somente(provedor: str, sem_raciocinio: bool = False):
+    """Nesta thread, só este provedor responde (comparação: a reserva esconderia quem falhou).
+
+    `sem_raciocinio` só existe para medir: no dia a dia o Claude pensa antes de responder.
+    """
+    _local.somente, _local.sem_raciocinio = provedor, sem_raciocinio
     try:
         yield
     finally:
         _local.__dict__.pop("somente", None)
+        _local.__dict__.pop("sem_raciocinio", None)
 
 
 def disponivel() -> bool:
@@ -342,6 +346,8 @@ def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: d
         "output_config": {"effort": "low" if getattr(_local, "pensar", "baixo") == "minimo"
                           else config.ANTHROPIC_ESFORCO},
     }
+    if getattr(_local, "sem_raciocinio", False) and config.ANTHROPIC_MODEL == "claude-haiku-5-5":
+        parametros["thinking"] = {"type": "disabled"}
     if config.ANTHROPIC_MODEL in MODELOS_COM_RESERVA:
         # Se um filtro de segurança recusar por engano, o próprio servidor
         # refaz o pedido num modelo adequado, na mesma chamada.
@@ -359,10 +365,11 @@ def _chamar_anthropic(sistema: str, texto: str, arquivos: list[dict], esquema: d
         raise FalhaProvedor("a resposta do Claude veio cortada")
     _local.modelo = config.ANTHROPIC_MODEL
     uso = getattr(resposta, "usage", None)
-    log.info("Claude %s respondeu em %.1fs (tokens: %s novos, %s do cache, %s de saída)",
+    escrito = "\n".join(b.text for b in resposta.content if b.type == "text").strip()
+    log.info("Claude %s respondeu em %.1fs (tokens: %s novos, %s do cache, %s de saída; %s letras de resposta)",
              config.ANTHROPIC_MODEL, time.monotonic() - inicio, getattr(uso, "input_tokens", "?"),
-             getattr(uso, "cache_read_input_tokens", "?"), getattr(uso, "output_tokens", "?"))
-    return "\n".join(b.text for b in resposta.content if b.type == "text").strip()
+             getattr(uso, "cache_read_input_tokens", "?"), getattr(uso, "output_tokens", "?"), len(escrito))
+    return escrito
 
 
 def transcrever_xai(arquivo: dict, termos: list[str], prazo: float) -> str:
