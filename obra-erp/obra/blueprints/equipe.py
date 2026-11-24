@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Equipe: cadastro de funcionários e lançamento de ponto.
 
-O ponto serve só para controle de presença: não há mais valor/hora nem folha
-calculada pelo app — pagamentos da equipe são lançados como despesa no Caixa.
+O ponto controla a presença; o custo da mão de obra que vai na planilha sai
+dele pelo vínculo de cada um, fichado ou avulso (ver `services/mao_de_obra.py`).
 
 Avulso: quem passa uma ou duas diárias numa obra que não é a dele. O ponto
 fica na obra onde ele trabalhou, sem mudar a equipe de nenhuma das duas. Se
@@ -24,7 +24,8 @@ from ..db import executar, get_db, registrar_auditoria, todos, um
 from ..security import (exigir_lancamento, garantir_acesso_obra, login_obrigatorio,
                         obra_do_funcionario, obra_do_dia, obras_permitidas, papel_obrigatorio,
                         usuario_atual)
-from ..utils import ApiErro, agora_iso, numero, texto
+from ..services.mao_de_obra import TABELA, VINCULOS, condicoes
+from ..utils import ApiErro, agora_iso, data_iso, hoje_iso, numero, texto
 
 bp = Blueprint("equipe", __name__, url_prefix="/api")
 
@@ -35,12 +36,94 @@ bp = Blueprint("equipe", __name__, url_prefix="/api")
 def listar(obra_id: int):
     garantir_acesso_obra(obra_id)
     incluir_inativos = request.args.get("inativos") == "1"
-    sql = """SELECT f.id, f.nome, f.funcao, f.documento, f.telefone, f.ativo, f.chave_pix
+    sql = """SELECT f.id, f.nome, f.funcao, f.documento, f.telefone, f.ativo, f.chave_pix,
+                    f.vinculo, f.classe, f.diaria, f.avulso
                FROM funcionarios f WHERE f.obra_id = ?"""
     if not incluir_inativos:
         sql += " AND f.ativo = 1"
     sql += " ORDER BY f.ativo DESC, f.nome COLLATE NOCASE"
-    return jsonify([dict(linha) for linha in todos(sql, (obra_id,))])
+    linhas = [dict(linha) for linha in todos(sql, (obra_id,))]
+    # Quanto cada um ganha é só do gestor: mestre e cliente também abrem esta lista.
+    gestor = usuario_atual()["papel"] == "gestor"
+    for linha in linhas:
+        cond = condicoes(linha)
+        for campo in ("vinculo", "classe", "diaria", "avulso"):
+            linha.pop(campo) if not gestor or campo == "avulso" else None
+        if gestor:
+            linha["vinculo"] = cond["vinculo"]
+            linha["definido"] = cond["definido"]
+    return jsonify(linhas)
+
+
+def _vinculo(valor) -> str:
+    v = texto(valor, 20).lower()
+    if v and v not in VINCULOS:
+        raise ApiErro("Vínculo inválido: use fichado ou avulso.")
+    return v
+
+
+def _classe(valor) -> str:
+    v = texto(valor, 30).lower()
+    if v and v not in TABELA:
+        raise ApiErro("Classe inválida.")
+    return v
+
+
+def _diaria(valor) -> float:
+    return numero(valor, 0, 0, 5000, "a diária")
+
+
+@bp.get("/mao-de-obra/tabela")
+@papel_obrigatorio("gestor")
+def tabela_mao_de_obra():
+    return jsonify([{"id": k, **v} for k, v in TABELA.items()])
+
+
+@bp.post("/funcionarios/<int:funcionario_id>/transferir")
+@papel_obrigatorio("gestor")
+def transferir(funcionario_id: int):
+    """Muda a pessoa de obra de vez.
+
+    Sai da equipe antiga com o histórico intacto e entra na nova com os mesmos
+    dados. `desde` evita que ela apareça com falta, ou no "efetivo todo", em dias
+    de antes da mudança.
+    """
+    origem_id = obra_do_funcionario(funcionario_id)
+    dados = request.get_json(silent=True) or {}
+    destino = int(numero(dados.get("obra_id"), 0, 0, campo="a obra"))
+    obra = um("SELECT id, nome FROM obras WHERE id = ? AND arquivada = 0", (destino,))
+    if not obra:
+        raise ApiErro("Obra de destino não encontrada.", 404)
+    garantir_acesso_obra(destino)
+    if destino == origem_id:
+        raise ApiErro("A pessoa já é desta obra.")
+    desde = data_iso(dados.get("data"), hoje_iso(), "a data")
+    f = dict(um("SELECT * FROM funcionarios WHERE id = ?", (funcionario_id,)))
+    if not f["ativo"]:
+        raise ApiErro(f"{f['nome']} não está na equipe ativa desta obra.")
+    antigo = next((dict(x) for x in todos("SELECT id, nome, ativo FROM funcionarios WHERE obra_id = ?", (destino,))
+                   if _sem_acento(x["nome"]) == _sem_acento(f["nome"])), None)
+    if antigo and antigo["ativo"]:
+        raise ApiErro(f"{f['nome']} já está na equipe de {obra['nome']}.", 409)
+
+    campos = ("funcao", "chave_pix", "documento", "telefone", "vinculo", "classe", "diaria")
+    db = get_db()
+    if antigo:
+        novo_id = antigo["id"]
+        db.execute(f"UPDATE funcionarios SET ativo = 1, avulso = 0, desde = ?, "
+                   f"{', '.join(c + ' = ?' for c in campos)} WHERE id = ?",
+                   [desde, *[f[c] for c in campos], novo_id])
+    else:
+        novo_id = db.execute(
+            f"""INSERT INTO funcionarios (obra_id, nome, tipo_contrato, valor_hora, ativo, avulso, desde, criado_em,
+                                          {', '.join(campos)})
+                VALUES (?, ?, 'fixo', 0, 1, 0, ?, ?, {', '.join('?' for _ in campos)})""",
+            [destino, f["nome"], desde, agora_iso(), *[f[c] for c in campos]]).lastrowid
+    db.execute("UPDATE funcionarios SET ativo = 0 WHERE id = ?", (funcionario_id,))
+    db.commit()
+    registrar_auditoria(usuario_atual(), "transferiu_funcionario", "funcionario", funcionario_id,
+                        f"{f['nome']} → {obra['nome']}")
+    return jsonify({"ok": True, "id": novo_id})
 
 
 @bp.post("/obras/<int:obra_id>/funcionarios")
@@ -52,11 +135,14 @@ def criar(obra_id: int):
 
     cur = executar(
         """INSERT INTO funcionarios (obra_id, nome, funcao, tipo_contrato, chave_pix, valor_hora,
-                                     documento, telefone, ativo, criado_em)
-           VALUES (?, ?, ?, 'fixo', ?, 0, ?, ?, 1, ?)""",
+                                     documento, telefone, ativo, vinculo, classe, diaria, desde,
+                                     criado_em)
+           VALUES (?, ?, ?, 'fixo', ?, 0, ?, ?, 1, ?, ?, ?, ?, ?)""",
         (obra_id, nome, texto(dados.get("funcao"), 80),
          texto(dados.get("chave_pix"), 120),
-         texto(dados.get("documento"), 40), texto(dados.get("telefone"), 40), agora_iso()),
+         texto(dados.get("documento"), 40), texto(dados.get("telefone"), 40),
+         _vinculo(dados.get("vinculo")), _classe(dados.get("classe")), _diaria(dados.get("diaria")),
+         data_iso(dados.get("desde"), None, "a data de entrada") or "", agora_iso()),
     )
     registrar_auditoria(usuario_atual(), "criou_funcionario", "funcionario", cur.lastrowid, nome)
     return jsonify({"id": cur.lastrowid}), 201
@@ -74,6 +160,9 @@ def atualizar(funcionario_id: int):
         "documento": lambda v: texto(v, 40),
         "telefone": lambda v: texto(v, 40),
         "ativo": lambda v: 1 if v else 0,
+        "vinculo": _vinculo,
+        "classe": _classe,
+        "diaria": _diaria,
     }
     campos, valores = [], []
     for chave, conversor in mapa.items():

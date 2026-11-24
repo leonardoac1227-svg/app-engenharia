@@ -358,6 +358,10 @@ CREATE TABLE IF NOT EXISTS funcionarios (
     telefone TEXT DEFAULT '',
     ativo INTEGER NOT NULL DEFAULT 1,
     avulso INTEGER NOT NULL DEFAULT 0,
+    vinculo TEXT DEFAULT '',
+    classe TEXT DEFAULT '',
+    diaria REAL NOT NULL DEFAULT 0,
+    desde TEXT DEFAULT '',
     criado_em TEXT,
     FOREIGN KEY (obra_id) REFERENCES obras (id) ON DELETE CASCADE
 );
@@ -661,6 +665,10 @@ COLUNAS_EXTRAS = [
     ("funcionarios", "tipo_contrato", "TEXT NOT NULL DEFAULT 'fixo'"),
     ("funcionarios", "chave_pix", "TEXT DEFAULT ''"),
     ("funcionarios", "avulso", "INTEGER NOT NULL DEFAULT 0"),
+    ("funcionarios", "vinculo", "TEXT DEFAULT ''"),
+    ("funcionarios", "classe", "TEXT DEFAULT ''"),
+    ("funcionarios", "diaria", "REAL NOT NULL DEFAULT 0"),
+    ("funcionarios", "desde", "TEXT DEFAULT ''"),
     ("contratos", "funcionario_id", "INTEGER"),
     ("horas", "valor_hora", "REAL NOT NULL DEFAULT 0"),
     ("horas", "justificativa", "TEXT DEFAULT ''"),

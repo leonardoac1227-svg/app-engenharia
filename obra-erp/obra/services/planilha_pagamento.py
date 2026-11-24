@@ -1,9 +1,8 @@
 # -*- coding: utf-8 -*-
 """Relatório de Lançamento por Categoria — planilha no modelo do escritório.
 
-A equipe aparece só como presença: horas da semana por pessoa e, numa coluna
-ao lado, as faltas de cada dia com a justificativa. Valor por funcionário não
-entra — o pagamento da equipe é lançado no Caixa, como qualquer despesa.
+Depois dos materiais vem a mão de obra, com o custo de cada pessoa na semana e
+um total próprio (ver `mao_de_obra.py`). O ponto aparece resumido numa linha.
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ VERDE_PONTO = "FFDDE6D9"        # verde-acinzentado claro: seção de presença
 AMARELO_PENDENTE = "FFFFF2CC"  # falta ainda sem justificativa
 
 LARGURAS = {"A": 33.0, "B": 48.7, "C": 26.5, "D": 11.7, "E": 16.3, "F": 13.2}
-LARGURA_OCORRENCIAS = 62.0
 
 _borda_fina = Side(style="thin")
 BORDA = Border(left=_borda_fina, right=_borda_fina, top=_borda_fina, bottom=_borda_fina)
@@ -92,9 +90,8 @@ def _altura_da_linha(*textos: str) -> float:
 # ---------------------------------------------------------------- montagem
 
 class _Aba:
-    def __init__(self, planilha, obra: dict, dados: dict, com_ocorrencias: bool = False):
-        self.com_ocorrencias = com_ocorrencias
-        self.ultima_coluna = "G" if com_ocorrencias else "F"
+    def __init__(self, planilha, obra: dict, dados: dict):
+        self.ultima_coluna = "F"
         self.ws = planilha
         self.obra = obra or {}
         self.dados = dados or {}
@@ -107,8 +104,6 @@ class _Aba:
         ws = self.ws
         for letra, largura in LARGURAS.items():
             ws.column_dimensions[letra].width = largura
-        if self.com_ocorrencias:
-            ws.column_dimensions["G"].width = LARGURA_OCORRENCIAS
 
         ws.page_setup.orientation = "landscape"
         ws.page_setup.paperSize = ws.PAPERSIZE_A4
@@ -152,86 +147,77 @@ class _Aba:
             celula.font = Font(name=FONTE, size=16, bold=True)
             celula.alignment = CENTRO
             celula.border = BORDA
-        if self.com_ocorrencias:
-            celula = ws.cell(self.linha, 7, "Ocorrências do ponto")
-            celula.font = Font(name=FONTE, size=16, bold=True)
-            celula.alignment = CENTRO
-            celula.border = BORDA
         ws.row_dimensions[self.linha].height = 24.75
         self.linha += 1
 
-    def secao_ponto(self, titulo: str, ponto: dict) -> None:
-        """Presença da equipe: horas da semana e, ao lado, as faltas do dia a dia.
-
-        Fica fora do total a pagar e não tem coluna de valor. Quem cumpriu a
-        jornada todos os dias fica com a coluna de ocorrências em branco.
-        """
+    def secao_mao_de_obra(self, titulo: str, mao: dict) -> None:
+        """Quanto custou cada pessoa na semana. Total próprio: não entra no TOTAL A PAGAR dos materiais."""
+        from .mao_de_obra import resumo_dos_dias
         ws = self.ws
-        linha = self.linha
-        equipe = ponto.get("equipe") or []
-
-        ws.merge_cells(start_row=linha, start_column=1, end_row=linha, end_column=4)
-        celula = ws.cell(linha, 1, titulo)
+        self.linha += 1
+        ws.merge_cells(start_row=self.linha, start_column=1, end_row=self.linha, end_column=5)
+        celula = ws.cell(self.linha, 1, titulo)
         celula.font = Font(name=FONTE, size=15, bold=True)
-        celula.fill = _preencher(VERDE_PONTO)
         celula.alignment = Alignment(horizontal="center", vertical="center")
-        total = ws.cell(linha, 5, f"{_horas_br(sum(p['horas'] for p in equipe))}")
-        total.font = Font(name=FONTE, size=16, bold=True)
-        total.fill = _preencher(VERDE_PONTO)
-        total.alignment = CENTRO
-        jornada = ws.cell(linha, 7, f"Jornada: {_horas_br(ponto.get('jornada') or 8)} de seg a sex")
-        jornada.font = Font(name=FONTE, size=12, bold=True)
-        jornada.fill = _preencher(VERDE_PONTO)
-        jornada.alignment = CENTRO
-        for coluna in (1, 2, 3, 4, 5, 7):
-            ws.cell(linha, coluna).border = BORDA
-        ws.row_dimensions[linha].height = 34.95
+        for coluna in range(1, 6):
+            ws.cell(self.linha, coluna).fill = _preencher(CINZA_CABECALHO)
+            ws.cell(self.linha, coluna).border = BORDA
+        ws.row_dimensions[self.linha].height = 34.95
         self.linha += 1
 
-        for pessoa in equipe:
-            linha = self.linha
-            dias = pessoa["dias_trabalhados"]
-            valores = [
-                pessoa["nome"],
-                pessoa["funcao"] or "mão de obra",
-                f"{dias} dia(s) trabalhado(s)",
-                "PONTO",
-                _horas_br(pessoa["horas"]),
-            ]
+        primeira = self.linha
+        for pessoa in mao["pessoas"]:
+            avulso = pessoa["vinculo"] == "avulso"
+            valores = [pessoa["nome"], "avulso" if avulso else (pessoa["funcao"] or "mão de obra"),
+                       resumo_dos_dias(pessoa), "-", pessoa["valor"] if pessoa["definido"] else "A definir"]
             for coluna, valor in enumerate(valores, 1):
-                celula = ws.cell(linha, coluna, valor)
+                celula = ws.cell(self.linha, coluna, valor)
                 celula.font = Font(name=FONTE, size=14 if coluna == 5 else 12, bold=True)
                 celula.alignment = ESQUERDA if coluna <= 2 else CENTRO
                 celula.border = BORDA
-
-            textos = [o["texto"] for o in pessoa["ocorrencias"]]
-            celula = ws.cell(linha, 7, "\n".join(textos))
-            celula.font = Font(name=FONTE, size=11, bold=bool(pessoa["sem_justificativa"]))
-            celula.alignment = ESQUERDA
-            celula.border = BORDA
-            if pessoa["sem_justificativa"]:
-                celula.fill = _preencher(AMARELO_PENDENTE)
-
-            altura_texto = sum(max(1, -(-len(t) // 60)) for t in textos) if textos else 1
-            ws.row_dimensions[linha].height = max(
-                _altura_da_linha(pessoa["nome"], valores[1]), min(18 + altura_texto * 16, 240))
+                if not pessoa["definido"]:
+                    celula.fill = _preencher(AMARELO_PENDENTE)
+            ws.cell(self.linha, 5).number_format = MOEDA
+            ws.row_dimensions[self.linha].height = _altura_da_linha(pessoa["nome"], valores[1], valores[2])
             self.linha += 1
 
+        ws.merge_cells(start_row=self.linha, start_column=1, end_row=self.linha, end_column=3)
+        ws.merge_cells(start_row=self.linha, start_column=4, end_row=self.linha, end_column=5)
+        rotulo = ws.cell(self.linha, 1, f"TOTAL MÃO DE OBRA - SEMANA {self.semana:02d}")
+        total = ws.cell(self.linha, 4, f"=SUM(E{primeira}:E{self.linha - 1})")
+        total.number_format = MOEDA
+        for celula in (rotulo, total):
+            celula.font = Font(name=FONTE, size=20, bold=True, color="FFFFFFFF")
+            celula.alignment = CENTRO
+        for coluna in range(1, 6):
+            ws.cell(self.linha, coluna).fill = _preencher(CINZA_CABECALHO)
+            ws.cell(self.linha, coluna).border = BORDA
+        ws.row_dimensions[self.linha].height = 40
+        self.linha += 1
+
+    def resumo_ponto(self, ponto: dict) -> None:
+        """O ponto numa linha só: quantas pessoas, quantas horas e quem não cumpriu a jornada."""
+        ws = self.ws
+        equipe = ponto.get("equipe") or []
+        partes = [f"PONTO: {len(equipe)} pessoa(s), {_horas_br(sum(p['horas'] for p in equipe))}"]
+        for pessoa in equipe:
+            if pessoa["ocorrencias"]:
+                partes.append(f"{pessoa['nome']} - " + ", ".join(o["texto"] for o in pessoa["ocorrencias"]))
         esquecidos = ponto.get("dias_sem_ponto") or []
         if esquecidos:
-            linha = self.linha
-            dias = ", ".join(f"{d['dia_semana'][:3]} {data_br(d['data'])[:5]}" for d in esquecidos)
-            ws.merge_cells(start_row=linha, start_column=1, end_row=linha, end_column=5)
-            celula = ws.cell(linha, 1, f"Ponto não lançado em: {dias}")
-            celula.font = Font(name=FONTE, size=12, bold=True)
-            celula.fill = _preencher(AMARELO_PENDENTE)
-            celula.alignment = ESQUERDA
-            for coluna in range(1, 6):
-                ws.cell(linha, coluna).border = BORDA
-            ws.row_dimensions[linha].height = 22
-            self.linha += 1
-
-        ws.row_dimensions[self.linha].height = 10.05
+            partes.append("Ponto não lançado em: " + ", ".join(
+                f"{d['dia_semana'][:3]} {data_br(d['data'])[:5]}" for d in esquecidos))
+        texto = "  |  ".join(partes)
+        self.linha += 1
+        ws.merge_cells(start_row=self.linha, start_column=1, end_row=self.linha, end_column=5)
+        celula = ws.cell(self.linha, 1, texto)
+        celula.font = Font(name=FONTE, size=10)
+        celula.alignment = ESQUERDA
+        pendente = esquecidos or any(p["sem_justificativa"] for p in equipe)
+        for coluna in range(1, 6):
+            ws.cell(self.linha, coluna).border = BORDA
+            ws.cell(self.linha, coluna).fill = _preencher(AMARELO_PENDENTE if pendente else VERDE_PONTO)
+        ws.row_dimensions[self.linha].height = min(16 * max(1, -(-len(texto) // 135)) + 4, 200)
         self.linha += 1
 
     def secao(self, titulo: str, itens: list[dict], cor: str = CINZA_CABECALHO,
@@ -346,7 +332,7 @@ class _Aba:
             ws.cell(linha, coluna).border = BORDA
         ws.row_dimensions[linha].height = 40
 
-        ws.print_area = f"A1:{self.ultima_coluna}{linha}"
+        self.linha += 1
 
 
 # ---------------------------------------------------------------- dados
@@ -373,8 +359,8 @@ def _horas_br(valor) -> str:
 
 def montar_aba(planilha, obra: dict, dados: dict) -> None:
     ponto = dados.get("ponto_equipe") or {}
-    tem_ponto = bool(ponto.get("equipe") or ponto.get("dias_sem_ponto"))
-    aba = _Aba(planilha, obra, dados, com_ocorrencias=tem_ponto)
+    mao = dados.get("mao_de_obra") or {}
+    aba = _Aba(planilha, obra, dados)
     aba.cabecalho()
 
     despesas = dados.get("despesas") or []
@@ -385,17 +371,18 @@ def montar_aba(planilha, obra: dict, dados: dict) -> None:
     aba.secao(f"NOTAS ABERTAS A PAGAR {aba.sigla}",
               _itens_de_despesas(despesas, "Em Aberto"))
 
-    # A antiga "folha" (horas × valor/hora) saiu: o relatório mostra só a
-    # presença. Pagamento da equipe entra no Caixa como despesa.
-    if tem_ponto:
-        aba.secao_ponto(f"PONTO DA EQUIPE - SEMANA {semana:02d}", ponto)
-
     pagas = _itens_de_despesas(despesas, "Pago")
     if pagas:
         aba.secao(f"NOTAS JÁ PAGAS NA SEMANA {semana:02d} (fora do total)", pagas,
                   entra_no_total=False)
 
     aba.total_geral()
+
+    if mao.get("pessoas"):
+        aba.secao_mao_de_obra(f"MÃO DE OBRA {aba.sigla} - SEMANA {semana:02d}", mao)
+    if ponto.get("equipe") or ponto.get("dias_sem_ponto"):
+        aba.resumo_ponto(ponto)
+    aba.ws.print_area = f"A1:{aba.ultima_coluna}{max(aba.linha - 1, 1)}"
 
 
 def _nome_da_aba(obra: dict, usados: set[str]) -> str:

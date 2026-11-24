@@ -140,6 +140,11 @@ def exportar_planilha_pagamento(semana_id: int):
                 dados_fechamento(irma["semana_id"]),
             ))
 
+    # Só na planilha, que é do gestor: o custo por pessoa não vai no fechamento, que o cliente abre.
+    from ..services.fechamento import listar_dias
+    from ..services.mao_de_obra import calcular
+    for obra_da_aba, dados_da_aba in abas:
+        dados_da_aba["mao_de_obra"] = calcular(obra_da_aba["id"], listar_dias(dados_da_aba["semana_id"], False))
     conteudo = gerar_planilha(abas)
     registrar_auditoria(usuario_atual(), "exportou_planilha_pagamento", "semana", semana_id,
                         f"{len(abas)} obra(s)")

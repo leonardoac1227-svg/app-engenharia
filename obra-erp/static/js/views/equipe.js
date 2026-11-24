@@ -1,13 +1,13 @@
 /* ==========================================================================
    EQUIPE — cadastro de profissionais e resumo de horas da semana.
-   O ponto é só controle de presença: pagamentos vão como despesa no Caixa.
+   O ponto controla a presença; o custo de cada um vai na planilha de pagamento.
    ========================================================================== */
 
 import { api } from '../api.js';
 import { estado, podeAdministrar } from '../estado.js';
 import { recarregarObra } from '../navegacao.js';
 import {
-  abrirModal, confirmar, dataCurta, esc, esqueleto, fecharModal, kpi, num, toast, vazio,
+  abrirModal, confirmar, dataCurta, esc, esqueleto, fecharModal, kpi, moeda, num, toast, vazio,
 } from '../util.js';
 
 let mostrarInativos = false;
@@ -77,6 +77,8 @@ export async function renderizar(raiz) {
               </div>
               <div class="staff-meta">
                 ${esc(f.funcao || 'sem função')}${f.telefone ? ` · ${esc(f.telefone)}` : ''}
+                ${f.vinculo ? ` · ${esc(f.vinculo)}${f.vinculo === 'avulso' && f.diaria ? ` ${moeda(f.diaria)}/dia` : ''}` : ''}
+                ${f.vinculo && !f.definido ? ' · <b>valor a definir</b>' : ''}
               </div>
             </div>
             ${podeAdministrar() ? `
@@ -133,6 +135,24 @@ function abrirFormularioProfissional(funcionario = null) {
     <input type="text" id="fnFuncao" value="${esc(funcionario?.funcao || '')}"
            placeholder="pedreiro, servente, gesseiro...">
 
+    <label class="field-label">Vínculo</label>
+    <select id="fnVinculo">
+      <option value="fichado" ${funcionario?.vinculo !== 'avulso' ? 'selected' : ''}>Fichado (tabela com encargos)</option>
+      <option value="avulso" ${funcionario?.vinculo === 'avulso' ? 'selected' : ''}>Avulso (diária combinada)</option>
+    </select>
+
+    <label class="field-label">Classe na tabela (só fichado)</label>
+    <select id="fnClasse">
+      <option value="">Pela função</option>
+      <option value="pedreiro" ${funcionario?.classe === 'pedreiro' ? 'selected' : ''}>Pedreiro / Carpinteiro</option>
+      <option value="servente_pratico" ${funcionario?.classe === 'servente_pratico' ? 'selected' : ''}>Servente prático</option>
+      <option value="servente_comum" ${funcionario?.classe === 'servente_comum' ? 'selected' : ''}>Servente comum</option>
+    </select>
+
+    <label class="field-label">Diária em R$ (só avulso)</label>
+    <input type="number" id="fnDiaria" min="0" step="0.01" inputmode="decimal"
+           value="${funcionario?.diaria ? esc(funcionario.diaria) : ''}" placeholder="100,00">
+
     <label class="field-label">CPF (opcional)</label>
     <input type="text" id="fnDocumento" value="${esc(funcionario?.documento || '')}"
            inputmode="numeric" placeholder="000.000.000-00">
@@ -160,6 +180,9 @@ function abrirFormularioProfissional(funcionario = null) {
         documento: modal.querySelector('#fnDocumento').value.trim(),
         chave_pix: modal.querySelector('#fnPix').value.trim(),
         telefone: modal.querySelector('#fnTelefone').value.trim(),
+        vinculo: modal.querySelector('#fnVinculo').value,
+        classe: modal.querySelector('#fnClasse').value,
+        diaria: modal.querySelector('#fnDiaria').value || 0,
       };
 
       if (edicao) await api.put(`/api/funcionarios/${funcionario.id}`, { ...corpo, ativo: 1 });

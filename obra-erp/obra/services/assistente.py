@@ -204,6 +204,20 @@ PONTO
   data_referencia). "Todos os dias" / "a semana toda" = segunda a sexta. Nunca lance só o primeiro dia.
   Ex.: "8 horas para todo o efetivo do I19 de segunda a quinta" → 4 ações ponto {equipe_inteira true,
   horas 8}, datas de segunda, terça, quarta e quinta.
+- ATÉ HOJE: "até hoje ninguém faltou no I19", "tá todo mundo vindo", "essa semana veio todo mundo até agora",
+  "ponto em dia até hoje", "pode botar o ponto do pessoal até hoje": equipe_inteira em CADA dia útil da
+  segunda-feira desta semana até hoje (na terça = segunda e terça). "Até ontem" não inclui hoje; "desde
+  quarta" começa na quarta. Nunca lance dia futuro nessas falas.
+- Com exceção em um dia ("até hoje só o Carlos faltou, na segunda"): uma ação por dia; só na segunda o
+  Carlos vai em registros com horas 0. Sem motivo dito, justificativa vazia: nunca invente motivo.
+- "Meia diária", "só veio de manhã", "saiu no almoço" = metade da jornada. "Chegou 2 horas atrasado" = jornada
+  menos 2. "Faltou mas trouxe atestado" = horas 0, justificativa "Atestado médico". "Vai ficar afastado até
+  sexta" = horas 0 com o motivo em cada dia até sexta.
+- "Choveu, ninguém trabalhou hoje": equipe_inteira true, horas 0, justificativa "Chuva". "Choveu, o pessoal
+  foi embora meio-dia": horas = metade, justificativa "Chuva".
+- "Feriado, não teve obra": não lance ponto; registre no diário (observacoes).
+- "Mesma equipe de ontem": repetir_ponto. "Sábado vieram só o Ademir e o Cosme": registros só deles no sábado.
+- "O ponto do João de ontem tá errado, ele veio": ponto de ontem só com o João e a jornada (corrige só ele).
 - "A equipe inteira", "todo mundo", "a turma toda": equipe_inteira = true, sem listar ninguém. Quem
   fugiu da regra ("menos o Carlos, que faltou") vai em registros com as horas dele.
 - Nome parecido com o de alguém da equipe é essa pessoa: o áudio costuma errar a grafia.
@@ -216,7 +230,23 @@ EQUIPE
 - "Voltou", "foi readmitido": editar_funcionario com alteracoes.ativo = true.
 - Pessoa nova citada com função ("entrou o Marcos, armador"): funcionario. Mudou função, telefone ou PIX:
   editar_funcionario só com o que mudou.
-- AVULSO: quem passou uma ou duas diárias nesta obra sem ser dela ("o Zé do O13 veio ajudar hoje",
+- TRANSFERÊNCIA: mudou de obra DE VEZ ("Seu Zé foi transferido pro T21", "passei o Zé pra lá", "agora o Zé é
+  do T21", "o Zé saiu do I19 e foi pro T21", "troca o Zé de obra", "o Zé tá no T21 a partir de hoje"):
+  transferir_funcionario com obra_id = obra ANTIGA e mover_para_obra = id da NOVA. Não é demissão: não use
+  editar_funcionario ativo false. Se a fala só disser a obra nova, a antiga é a que tem a pessoa na equipe.
+  - "... e chegou um ajudante novo, o Pedro", "no lugar dele entrou o Pedro": além da transferência, uma ação
+    funcionario (Pedro, função dita) na obra que ficou sem ele.
+  - "Troca o Zé pelo Pedro, o Pedro do T21 vem pro I19": duas transferências.
+  - Emprestado por um dia ("o Zé foi ajudar no T21 hoje", "amanhã ele volta") NÃO é transferência: é diária
+    avulsa no T21. Na dúvida entre as duas, sem "de vez", "agora é", "transferido": trate como emprestado e
+    pergunte em "resposta".
+  - Ponto de dias em que ele ainda estava na obra antiga fica na antiga: registros com o nome dele.
+- FICHADO E AVULSO: "o Cosme é fichado", "seu José é avulso, a diária dele é 100", "aumenta a diária do Cosme
+  pra 140", "o Pedro é servente prático": editar_funcionario (ou funcionario, se é novo) com vinculo, classe
+  ou diaria. classe só para fichado. Nunca invente vínculo, classe nem diária.
+- Apelido e tratamento: "Seu Zé", "Zé", "Manteiga" e "Seu jose(manteiga)" são a mesma pessoa. Se dois da
+  equipe puderem ser o citado, não grave; pergunte qual.
+- DIÁRIA EM OUTRA OBRA: quem passou uma ou duas diárias nesta obra sem ser dela ("o Zé do O13 veio ajudar hoje",
   "um avulso, o Bira, fez uma diária", "o Ademir passou o dia no T21"): registro no ponto da obra onde
   trabalhou com avulso = true e o nome. NÃO crie funcionario nem editar_funcionario: ele não entra na
   equipe desta obra e continua na equipe da obra dele.
@@ -529,6 +559,9 @@ _DIAS_DA_SEMANA = (r"se?n?gunda", r"terca", r"quarta", r"quinta", r"sexta", r"sa
 _DIA = r"(se?n?gunda|terca|quarta|quinta|sexta|sabado|domingo)(?:[\s-]*feira)?"
 _INTERVALO_DE_DIAS = re.compile(rf"\b{_DIA}\s+(?:a|ate|até)\s+(?:a\s+|o\s+)?{_DIA}\b")
 _EXCETO_DIA = re.compile(rf"\b(?:menos|exceto|tirando|fora|sem)\s+(?:a\s+|o\s+|na\s+|no\s+)?{_DIA}\b")
+_ATE = re.compile(rf"\b(?:(?:de|desde)\s+(?:a\s+)?{_DIA}\s+)?ate\s+(?:o\s+dia\s+de\s+|o\s+dia\s+|a\s+)?"
+                  rf"(hoje|agora|ontem|{_DIA[1:_DIA.index(')')]})\b(?:[\s-]*feira)?")
+_DESDE = re.compile(rf"\bdesde\s+(?:a\s+)?{_DIA}\b")
 _SEMANA_TODA = re.compile(r"\b(todos os dias|todo dia|todos dias|a semana toda|semana inteira|"
                           r"toda a semana|a semana inteira)\b")
 
@@ -550,8 +583,26 @@ def dias_ditos(mensagem: str, referencia: str) -> list[str]:
         a, b = _indice_do_dia(inicio), _indice_do_dia(fim)
         dias |= set(range(a, b + 1)) if a <= b else set()
     sem_intervalo = _INTERVALO_DE_DIAS.sub(" ", fala)
+    # "Até hoje ninguém faltou", "desde terça": da segunda (ou do dia dito) até o dia citado,
+    # só dias úteis. Trecho tirado da fala para o dia dele não contar como dia solto.
+    hoje_i = date.fromisoformat(referencia[:10]).weekday()
+    limitado = False
+    ate = _ATE.search(sem_intervalo)
+    if ate:
+        inicio = _indice_do_dia(ate.group(1)) if ate.group(1) else 0
+        fim = {"hoje": hoje_i, "agora": hoje_i, "ontem": hoje_i - 1}.get(ate.group(2))
+        fim = _indice_do_dia(ate.group(2)) if fim is None else fim
+        dias |= set(range(inicio, min(fim, 4) + 1))
+        limitado = True
+        sem_intervalo = _ATE.sub(" ", sem_intervalo)
+    elif _DESDE.search(sem_intervalo):
+        dias |= set(range(_indice_do_dia(_DESDE.search(sem_intervalo).group(1)), min(hoje_i, 4) + 1))
+        limitado = True
+        sem_intervalo = _DESDE.sub(" ", sem_intervalo)
+    elif re.search(r"\bontem e hoje\b|\bhoje e ontem\b", sem_intervalo) and hoje_i > 0:
+        dias |= {hoje_i - 1, hoje_i}
     excetos = {_indice_do_dia(d) for d in _EXCETO_DIA.findall(sem_intervalo)}
-    if _SEMANA_TODA.search(fala):
+    if _SEMANA_TODA.search(fala) and not limitado:
         dias |= set(range(0, 5))
     # Dias soltos ("segunda, terça e quarta"), fora os que são exceção.
     soltos = {_indice_do_dia(d) for d in re.findall(rf"\b{_DIA}\b", _EXCETO_DIA.sub(" ", sem_intervalo))}
@@ -633,12 +684,26 @@ def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
 
 def _obra_do_lancamento(acao: dict, ids: set[int]) -> int:
     """Correção vale na obra do lançamento citado, seja qual for a obra da conversa."""
+    if acao.get("tipo") == "transferir_funcionario":
+        return _obra_de_quem_sai(acao.get("dados") or {}, ids)
     if acao.get("tipo") not in ("editar_despesa", "pagar_despesa", "excluir_despesa"):
         return 0
     despesa_id = catalogo.inteiro((acao.get("dados") or {}).get("despesa_id"))
     linha = um("""SELECT s.obra_id FROM despesas x JOIN dias d ON d.id = x.dia_id
                     JOIN semanas s ON s.id = d.semana_id WHERE x.id = ?""", (despesa_id,))
     return linha["obra_id"] if linha and linha["obra_id"] in ids else 0
+
+
+def _obra_de_quem_sai(dados: dict, ids: set[int]) -> int:
+    """Transferência vale na obra onde a pessoa está, ainda que a fala só diga a nova."""
+    destino = catalogo.inteiro(dados.get("mover_para_obra"))
+    equipe = [dict(r) for r in todos(
+        "SELECT id, obra_id, nome, ativo FROM funcionarios WHERE ativo = 1 AND COALESCE(avulso, 0) = 0")
+        if r["obra_id"] in ids and r["obra_id"] != destino]
+    fid = catalogo.inteiro(dados.get("funcionario_id"))
+    if fid not in {f["id"] for f in equipe}:
+        fid = catalogo.casar_funcionario(texto(dados.get("nome"), 120), equipe)
+    return next((f["obra_id"] for f in equipe if f["id"] == fid), 0)
 
 
 def _obra_da_equipe(acoes: list[dict], obras: list[dict], referencia: str) -> int:

@@ -105,7 +105,7 @@ medir("caixa", f"/api/obras/{O}/financeiro", 10)
 medir("locações", f"/api/obras/{O}/locacoes", 8)
 medir("dias da semana", f"/api/semanas/{ULTIMA}/dias", 14)
 medir("relatório PDF", f"/api/semanas/{ULTIMA}/relatorio.pdf", 30)
-medir("planilha de pagamento", f"/api/semanas/{ULTIMA}/pagamentos.xlsx", 32)
+medir("planilha de pagamento", f"/api/semanas/{ULTIMA}/pagamentos.xlsx", 36)
 
 print("\n== NÃO CRESCE COM O VOLUME ==")
 # O sinal de N+1 é a consulta que se multiplica com o número de linhas.

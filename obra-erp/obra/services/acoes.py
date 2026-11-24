@@ -54,7 +54,8 @@ class Contexto:
     def funcionarios(self) -> list[dict]:
         if self._funcionarios is None:
             self._funcionarios = [dict(r) for r in todos(
-                "SELECT id, nome, funcao, ativo FROM funcionarios WHERE obra_id = ? ORDER BY nome",
+                "SELECT id, nome, funcao, ativo, desde, vinculo, classe, diaria FROM funcionarios "
+                "WHERE obra_id = ? ORDER BY nome",
                 (self.obra_id,))]
         return self._funcionarios
 
@@ -123,6 +124,16 @@ def indices(lista, arquivos: list, somente_imagem: bool = False) -> list[int]:
     return validos
 
 
+_TRATAMENTOS = {"seu", "sr", "senhor", "dona", "o", "a", "do", "da", "de"}
+_APELIDOS_DE_NOME = {"ze": "jose", "zezinho": "jose", "chico": "francisco", "tonho": "antonio", "toinho": "antonio"}
+
+
+def _nucleo(nome: str) -> list[str]:
+    """"Seu jose(manteiga)" e "seu Zé" → ["jose", ...]: sem tratamento, com o apelido comum traduzido."""
+    partes = re.findall(r"[a-z0-9]+", sem_acento(nome))
+    return [_APELIDOS_DE_NOME.get(p, p) for p in partes if p not in _TRATAMENTOS]
+
+
 def casar_funcionario(nome: str, funcionarios: list[dict], incluir_inativos: bool = False) -> int:
     """Encontra o funcionário pelo nome falado ("o João" → "João Batista")."""
     alvo = sem_acento(nome)
@@ -135,7 +146,14 @@ def casar_funcionario(nome: str, funcionarios: list[dict], incluir_inativos: boo
     parciais = [f["id"] for f in ativos
                 if sem_acento(f["nome"]).split(" ")[0] == alvo.split(" ")[0]
                 or sem_acento(f["nome"]).startswith(alvo)]
-    return parciais[0] if len(parciais) == 1 else 0
+    if len(parciais) == 1 and alvo.split(" ")[0] not in _TRATAMENTOS:
+        return parciais[0]
+    dito = _nucleo(nome)
+    if not dito:
+        return 0
+    # Todas as palavras ditas estão no cadastro ("Zé" ou "Manteiga" → "Seu jose(manteiga)").
+    por_nucleo = [f["id"] for f in ativos if set(dito) <= set(_nucleo(f["nome"]))]
+    return por_nucleo[0] if len(por_nucleo) == 1 else 0
 
 
 def _funcionario(d: dict, ctx: Contexto, incluir_inativos: bool = False) -> dict:
@@ -220,10 +238,16 @@ def _equipe_inteira(d, ctx) -> list[dict]:
     citados = {inteiro(r.get("funcionario_id")) for r in d.get("registros") or [] if isinstance(r, dict)}
     citados |= {casar_funcionario(texto(r.get("nome"), 120), ctx.funcionarios)
                 for r in d.get("registros") or [] if isinstance(r, dict)}
-    horas = valor(d.get("horas")) or config.JORNADA_HORAS
-    return [{"funcionario_id": f["id"], "nome": f["nome"], "horas": horas}
+    zerado = "horas" in d and d.get("horas") not in (None, "") and valor(d.get("horas")) == 0 \
+        and texto(d.get("justificativa"), 160)
+    horas = 0 if zerado else valor(d.get("horas")) or config.JORNADA_HORAS
+    motivo = {"justificativa": texto(d.get("justificativa"), 160)} if texto(d.get("justificativa"), 160) else {}
+    data = data_ou(d.get("data"), ctx.referencia)
+    # Quem entrou na obra depois deste dia não faz parte do efetivo dele.
+    return [{"funcionario_id": f["id"], "nome": f["nome"], "horas": horas, **motivo}
             for f in ctx.funcionarios
-            if f.get("ativo", 1) and f["id"] not in citados and f["id"] not in ctx.desligados]
+            if f.get("ativo", 1) and f["id"] not in citados and f["id"] not in ctx.desligados
+            and str(f.get("desde") or "")[:10] <= data]
 
 
 def _n_ponto(d, ctx):
@@ -278,7 +302,8 @@ _registrar(TipoAcao(
     "ponto", "Ponto da equipe",
     "data, registros: [{funcionario_id, nome, horas, justificativa, avulso}] — um por pessoa citada "
     "(avulso true = diária de quem não é desta obra); "
-    "equipe_inteira (true = todos da equipe ativa) + horas (se não for a jornada), com as exceções em registros. "
+    "equipe_inteira (true = todos da equipe ativa) + horas (se não for a jornada) + justificativa (ninguém "
+    "trabalhou: horas 0 e o motivo), com as exceções em registros. "
     "Jornada completa = jornada_horas; manhã e tarde (ou sem turno dito) = jornada; só um turno = metade; "
     "faltou = 0 horas com justificativa; abaixo da jornada, justificativa com o motivo dito",
     _n_ponto, _e_ponto,
@@ -306,7 +331,35 @@ def _n_funcionario(d, ctx):
     if any(sem_acento(f["nome"]) == sem_acento(nome) and f.get("ativo", 1) for f in ctx.funcionarios):
         raise Pular("")  # já existe: não duplica
     return {"nome": nome, "funcao": texto(d.get("funcao"), 80), "telefone": texto(d.get("telefone"), 40),
-            "documento": texto(d.get("documento"), 40), "chave_pix": texto(d.get("chave_pix"), 120)}
+            "documento": texto(d.get("documento"), 40), "chave_pix": texto(d.get("chave_pix"), 120),
+            "desde": data_ou(d.get("data"), ctx.referencia), **_vinculo_dito(d)}
+
+
+def _vinculo_dito(d: dict) -> dict:
+    """Fichado/avulso, classe e diária, só o que foi dito. Diária dita sem vínculo é de avulso."""
+    from .mao_de_obra import TABELA, VINCULOS
+    saida = {}
+    vinculo = sem_acento(str(d.get("vinculo") or ""))
+    diaria = valor(d.get("diaria"))
+    if vinculo in VINCULOS:
+        saida["vinculo"] = vinculo
+    elif diaria > 0:
+        saida["vinculo"] = "avulso"
+    if diaria > 0:
+        saida["diaria"] = diaria
+    if str(d.get("classe") or "") in TABELA:
+        saida["classe"] = d["classe"]
+    return saida
+
+
+def _texto_vinculo(d: dict) -> str:
+    from .mao_de_obra import TABELA
+    partes = [d["vinculo"]] if d.get("vinculo") else []
+    if d.get("classe"):
+        partes.append(TABELA[d["classe"]]["nome"].lower())
+    if d.get("diaria"):
+        partes.append(f"diária {moeda(d['diaria'])}")
+    return ", ".join(partes)
 
 
 def _e_funcionario(ex, d, arq):
@@ -316,9 +369,11 @@ def _e_funcionario(ex, d, arq):
 
 _registrar(TipoAcao(
     "funcionario", "Novo profissional",
-    "nome, funcao, telefone, documento, chave_pix",
+    "nome, funcao, telefone, documento, chave_pix, data (dia em que chegou), vinculo (fichado|avulso), "
+    "classe (pedreiro|servente_pratico|servente_comum), diaria (valor combinado, só avulso)",
     _n_funcionario, _e_funcionario,
-    lambda d: f"Cadastrado: {d['nome']}" + (f" ({d['funcao']})" if d.get("funcao") else ""),
+    lambda d: f"Cadastrado: {d['nome']}" + (f" ({d['funcao']})" if d.get("funcao") else "")
+    + (f" · {_texto_vinculo(d)}" if _texto_vinculo(d) else ""),
     permissao="gestor",
     quando="pessoa nova citada que não está na equipe (crie junto com o ponto dela)"))
 
@@ -345,6 +400,9 @@ def _n_editar_funcionario(d, ctx):
         novo = texto(origem.get(campo), limite)
         if novo and novo != (f.get(campo) or ""):
             alteracoes[campo] = novo
+    for campo, novo in _vinculo_dito(origem).items():
+        if novo != f.get(campo):
+            alteracoes[campo] = novo
     ativo = origem.get("ativo")
     if ativo in (False, 0, "0", "false", "nao", "não") and f.get("ativo", 1):
         alteracoes["ativo"] = False
@@ -357,7 +415,8 @@ def _n_editar_funcionario(d, ctx):
 
 _registrar(TipoAcao(
     "editar_funcionario", "Alterar profissional",
-    "funcionario_id, alteracoes: {nome, funcao, telefone, documento, chave_pix, ativo (false = desligar)}",
+    "funcionario_id, alteracoes: {nome, funcao, telefone, documento, chave_pix, ativo (false = desligar), "
+    "vinculo (fichado|avulso), classe (pedreiro|servente_pratico|servente_comum), diaria}",
     _n_editar_funcionario,
     lambda ex, d, arq: ex.req("PUT", f"/api/funcionarios/{d['funcionario_id']}", json=d["alteracoes"]),
     lambda d: f"{d['nome_atual']}: " + ("desligado da equipe" if d["alteracoes"].get("ativo") is False else
@@ -365,6 +424,31 @@ _registrar(TipoAcao(
     permissao="gestor",
     quando="mudar função, telefone, PIX; demitido, mandado embora, saiu da obra = alteracoes.ativo false "
            "(sai da lista, o histórico de ponto fica); voltou, foi readmitido = ativo true"))
+
+
+def _n_transferir(d, ctx):
+    destino = inteiro(d.get("mover_para_obra"))
+    obra = um("SELECT id, nome FROM obras WHERE id = ? AND arquivada = 0", (destino,))
+    if not obra:
+        raise Pular(f"Não entendi para qual obra vai {d.get('nome') or 'a pessoa'}.")
+    f = _funcionario(d, ctx)
+    if destino == ctx.obra_id:
+        raise Pular(f"{f['nome']} já está em {obra['nome']}.")
+    if not f.get("ativo", 1):
+        raise Pular(f"{f['nome']} já não está na equipe desta obra.")
+    return {"funcionario_id": f["id"], "nome_atual": f["nome"], "obra_id": obra["id"], "obra_nome": obra["nome"],
+            "data": data_ou(d.get("data"), ctx.referencia)}
+
+
+_registrar(TipoAcao(
+    "transferir_funcionario", "Transferência",
+    "funcionario_id, nome, mover_para_obra (id da obra NOVA), data (primeiro dia lá). obra_id da ação = a obra ANTIGA",
+    _n_transferir,
+    lambda ex, d, arq: ex.req("POST", f"/api/funcionarios/{d['funcionario_id']}/transferir",
+                              json={"obra_id": d["obra_id"], "data": d["data"]}),
+    lambda d: f"{d['nome_atual']} transferido para {d['obra_nome']} a partir de {data_br(d['data'])}",
+    permissao="gestor",
+    quando="a pessoa mudou de obra de vez (transferido, foi pro T21, agora é do T21, passei ele pra lá)"))
 
 
 # ---------------------------------------------------------------- fotos
@@ -804,20 +888,20 @@ _registrar(TipoAcao(
 _S, _N, _I, _B = {"type": "string"}, {"type": "number"}, {"type": "integer"}, {"type": "boolean"}
 _ALTERACOES = {k: _S for k in ("descricao", "fornecedor", "categoria", "status_pagamento", "reembolsar_para",
                                "numero_nota", "vencimento", "mover_para_data", "nome", "funcao", "telefone",
-                               "documento", "chave_pix", "cliente", "endereco", "data_inicio", "previsao_fim",
+                               "documento", "chave_pix", "vinculo", "classe", "cliente", "endereco", "data_inicio", "previsao_fim",
                                "status")}
-_ALTERACOES.update(valor=_N, orcamento_total=_N, ativo=_B, mover_para_obra=_I)
+_ALTERACOES.update(valor=_N, diaria=_N, orcamento_total=_N, ativo=_B, mover_para_obra=_I)
 ESQUEMA_DADOS = {
     "type": "object",
     "properties": {
         **{k: _S for k in ("data", "producao_dia", "clima", "observacoes", "nome", "funcao", "telefone",
-                           "documento", "chave_pix", "legenda", "ambiente", "categoria", "descricao",
+                           "documento", "chave_pix", "vinculo", "classe", "legenda", "ambiente", "categoria", "descricao",
                            "fornecedor", "status_pagamento", "numero_nota", "vencimento", "reembolsar_para",
                            "linha_digitavel", "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
                            "pago_em", "meta", "formato", "mover_para_data")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
                            "parcela_id", "locacao_id", "ciclos", "mover_para_obra")},
-        "valor": _N, "orcamento_previsto": _N, "horas": _N,
+        "valor": _N, "orcamento_previsto": _N, "horas": _N, "diaria": _N, "justificativa": _S,
         "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},
         "frete_datas": {"type": "array", "items": _S},
@@ -873,9 +957,9 @@ def normalizar(bruto_acoes, ctx: Contexto) -> tuple[list[dict], list[str]]:
     acoes, avisos = [], []
     # "A equipe toda veio, o Carlos foi demitido": quem sai nesta mensagem não entra no ponto dela.
     for item in bruto_acoes or []:
-        if isinstance(item, dict) and item.get("tipo") == "editar_funcionario":
-            dados = _juntar_dados(item, "editar_funcionario")
-            if _desliga(dados):
+        if isinstance(item, dict) and item.get("tipo") in ("editar_funcionario", "transferir_funcionario"):
+            dados = _juntar_dados(item, item["tipo"])
+            if item["tipo"] == "transferir_funcionario" or _desliga(dados):
                 try:
                     ctx.desligados.add(_funcionario(dados, ctx)["id"])
                 except Pular:

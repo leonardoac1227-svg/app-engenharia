@@ -87,7 +87,7 @@ def ocorrencias_da_semana(obra_id: int, dias: list[dict]) -> dict:
 
     com_registro = {funcionario for (_, funcionario) in registros}
     funcionarios = [dict(f) for f in todos(
-        """SELECT id, nome, funcao, ativo, criado_em FROM funcionarios
+        """SELECT id, nome, funcao, ativo, criado_em, desde FROM funcionarios
             WHERE obra_id = ? AND COALESCE(avulso, 0) = 0 ORDER BY nome""", (obra_id,))
         if f["ativo"] or f["id"] in com_registro]
 
@@ -95,9 +95,11 @@ def ocorrencias_da_semana(obra_id: int, dias: list[dict]) -> dict:
     avaliados = [d for d in dias
                  if d["dia_semana"] in config.DIAS_UTEIS and d.get("data") and d["data"] <= hoje]
 
+    from .mao_de_obra import em_outra_obra
+    fora = em_outra_obra([f["id"] for f in funcionarios], [d["data"] for d in avaliados], obra_id)
     equipe = []
     for f in funcionarios:
-        desde = str(f.get("criado_em") or "")[:10]
+        desde = max(str(f.get("criado_em") or "")[:10], str(f.get("desde") or "")[:10])
         horas_semana, dias_trabalhados, ocorrencias = 0.0, 0, []
         for d in dias:
             registro = registros.get((d["id"], f["id"]))
@@ -109,7 +111,8 @@ def ocorrencias_da_semana(obra_id: int, dias: list[dict]) -> dict:
             if d["id"] not in dias_com_ponto:
                 continue
             registro = registros.get((d["id"], f["id"]))
-            if not registro and (not f["ativo"] or (desde and desde > d["data"])):
+            if not registro and (not f["ativo"] or (desde and desde > d["data"])
+                                 or (f["id"], d["data"]) in fora):
                 continue
             horas = registro["horas"] if registro else 0.0
             tipo = classificar(horas, jornada)
