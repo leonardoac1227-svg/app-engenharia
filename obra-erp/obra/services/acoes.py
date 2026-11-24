@@ -506,14 +506,19 @@ def _d_despesa(d):
         partes.append(f"aluguel {d['locacao_frequencia']} × {d['locacao_ciclos']}")
     if d.get("anexos"):
         partes.append("📎")
-    return f"Despesa em {data_br(d['data'])}: " + " · ".join(p for p in partes if p)
+    quando = f"Despesa em {data_br(d['data'])}: "
+    if len(d.get("parcelas_lista") or []) == 1:
+        pagar = dia_de_pagar(date.fromisoformat(d["parcelas_lista"][0]["vencimento"])).isoformat()
+        if pagar > d["data"]:
+            quando = f"Despesa programada para {data_br(pagar)}: "
+    return quando + " · ".join(p for p in partes if p)
 
 
 _registrar(TipoAcao(
     "despesa", "Despesa",
     "data, categoria (uma de \"categorias\"), descricao (itens com quantidade + o que o usuário disse), "
     "fornecedor, valor (TOTAL final), status_pagamento (Pago | Em Aberto | Reembolso), numero_nota, "
-    "vencimento, reembolsar_para, anexos (índices dos comprovantes), parcelas_lista [{vencimento, valor}] "
+    "vencimento, linha_digitavel (só boleto), reembolsar_para, anexos (índices dos comprovantes), parcelas_lista [{vencimento, valor}] "
     "(cada vencimento impresso na nota a prazo, na ordem), parcelas + parcela_frequencia "
     "(parcelado sem datas impressas; valor = total), frete_transportador + frete_viagens + frete_datas (frete com várias "
     "viagens; valor = de CADA viagem), locacao_frequencia (diaria|semanal|quinzenal|mensal) + "
@@ -808,7 +813,7 @@ ESQUEMA_DADOS = {
         **{k: _S for k in ("data", "producao_dia", "clima", "observacoes", "nome", "funcao", "telefone",
                            "documento", "chave_pix", "legenda", "ambiente", "categoria", "descricao",
                            "fornecedor", "status_pagamento", "numero_nota", "vencimento", "reembolsar_para",
-                           "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
+                           "linha_digitavel", "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
                            "pago_em", "meta", "formato", "mover_para_data")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
                            "parcela_id", "locacao_id", "ciclos", "mover_para_obra")},

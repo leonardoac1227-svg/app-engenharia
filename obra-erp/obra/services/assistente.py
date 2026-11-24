@@ -28,7 +28,8 @@ from .. import config
 from ..db import liberar_leitura, todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
-from . import ia_provedores, padroes
+from . import boleto, ia_provedores, padroes
+from .parcelamento import dia_de_pagar
 
 MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
@@ -122,6 +123,14 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
 - Data do lançamento: a que o usuário disser; sem data dita, data_referencia (hoje), mesmo que o documento
   seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
   Vencimento de boleto ou contrato vai em "vencimento", nunca em "data".
+- BOLETO: copie "Data de Vencimento" em "vencimento" e a linha digitável (47 números) em "linha_digitavel".
+  Não confunda com "Data do Documento", "Data Processamento" nem com o período da locação ("17/11 até 17/12").
+  Fornecedor = Beneficiário (nunca o banco nem o Pagador); valor = "Valor do Documento", sem multa nem juros.
+  Descrição pelo que está em "Instruções" ("Locação mensal de 50 escoras metálicas").
+  Boleto que vence depois desta semana é programado pelo app na sexta de pagamento até o vencimento
+  (vence quinta 17/12 → planilha da sexta 11/12), mesmo sem o usuário pedir. Boleto já vencido ou que se
+  paga nesta semana entra hoje. Não preencha parcelas_lista nem locacao_frequencia só por causa do boleto.
+  Se o usuário disser o dia ("lançar no dia 11/12"), esse dia vai em "data" e o impresso em "vencimento".
 - Número do documento sempre em numero_nota, nunca na descrição. Recibo: "REC 1191".
 - NOTA A PRAZO / PARCELADA (quando o usuário disser "parcelada", "em 3x", "a prazo", "tem boleto",
   "vencimentos", "parcelas"): leia o quadro "PARCELAS", "DUPLICATAS" ou "FATURA" do documento e preencha
@@ -405,6 +414,73 @@ def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> 
             dados["data"] = referencia
 
 
+_FICA_NA_SEMANA = re.compile(r"\b(hoje|ontem|anteontem|essa semana|esta semana|nessa semana|nesta semana"
+                             r"|semana atual)\b")
+
+
+def _programar_boletos(acoes: list[dict], mensagem: str, referencia: str, arquivos: list[dict]) -> None:
+    """Boleto que vence adiante entra na semana em que é pago (a sexta até o vencimento).
+
+    Antes só ia para a semana certa quando o gestor ditava o dia. Boleto vencido,
+    ou pago nesta semana, fica em hoje: pela sexta anterior ele cairia numa
+    semana já fechada e sumiria da planilha.
+    """
+    despesas = _despesas(acoes)
+    fala = catalogo.sem_acento(fala_do_usuario(mensagem))
+    dita = _data_foi_dita(mensagem)
+    hoje = date.fromisoformat(referencia[:10])
+    domingo = hoje + timedelta(days=6 - hoje.weekday())
+    lidos: dict[int, list[dict]] = {}
+
+    for dados in despesas:
+        indices = catalogo.indices(dados.get("anexos"), arquivos)
+        if not indices and len(despesas) == 1 and len(arquivos) == 1:
+            indices = [0]
+        boletos = []
+        for i in indices:
+            if i not in lidos:
+                lidos[i] = boleto.do_arquivo(arquivos[i], referencia)
+            boletos += lidos[i]
+        if not boletos:
+            da_ia = boleto.ler_linha(dados.get("linha_digitavel"), referencia)
+            boletos = [da_ia] if da_ia else []
+        boletos = list({b["linha"]: b for b in boletos}.values())
+        # Vários boletos num lançamento só (carnê): fica com a leitura da IA, que sabe o que foi pedido.
+        if len(boletos) != 1 or not boletos[0]["vencimento"]:
+            continue
+        if catalogo.status_pagamento(dados.get("status_pagamento")) in ("Pago", "Reembolso"):
+            continue
+        lista = dados.get("parcelas_lista")
+        lista = lista if isinstance(lista, list) else []
+        if len(lista) > 1:
+            continue
+
+        impresso = boletos[0]["vencimento"]
+        if catalogo.valor(dados.get("valor")) <= 0:
+            dados["valor"] = boletos[0]["valor"]
+        programado = [{"vencimento": impresso, "valor": dados.get("valor")}]
+        sexta = dia_de_pagar(date.fromisoformat(impresso))
+        dados["vencimento"] = impresso
+        # Uma cobrança não abre aluguel recorrente: as renovações duplicariam os próximos boletos.
+        dados.pop("locacao_frequencia", None)
+
+        if dita and lista and isinstance(lista[0], dict):
+            dia = catalogo.data_ou(lista[0].get("vencimento"), "")
+            if dia > referencia and dia != impresso:
+                # O gestor ditou o dia de pagar: vale o dele. Sendo a mesma sexta que o
+                # app escolheria, guarda-se o vencimento impresso.
+                if dia_de_pagar(date.fromisoformat(dia)) == sexta:
+                    dados["parcelas_lista"] = programado
+                continue
+        dados.pop("parcelas_lista", None)
+        data = catalogo.data_ou(dados.get("data"), referencia)
+        if _FICA_NA_SEMANA.search(fala) or (dita and data < referencia):
+            continue
+        if sexta > domingo:
+            dados["data"] = referencia
+            dados["parcelas_lista"] = programado
+
+
 # Dias da semana na fala (sem acento). "sengunda" é erro comum de digitação/áudio.
 _DIAS_DA_SEMANA = (r"se?n?gunda", r"terca", r"quarta", r"quinta", r"sexta", r"sabado", r"domingo")
 _DIA = r"(se?n?gunda|terca|quarta|quinta|sexta|sabado|domingo)(?:[\s-]*feira)?"
@@ -583,6 +659,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     _aplicar_status_dito(acoes_brutas, mensagem)
     _parcelamento_so_se_dito(acoes_brutas, mensagem)
     _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
+    _programar_boletos(acoes_brutas, mensagem, referencia, arquivos)
     _ponto_nos_dias_ditos(acoes_brutas, mensagem, referencia)
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
