@@ -42,7 +42,7 @@ from datetime import date, timedelta
 from .. import config
 from ..db import executar, todos, um
 from .anexos_despesa import registrar as registrar_anexo
-from ..utils import ApiErro, agora_iso, data_iso, numero, texto
+from ..utils import ApiErro, agora_iso, data_iso, hoje_iso, numero, texto
 
 FREQUENCIAS = {
     "semanal": ("Semanal", 7),
@@ -157,6 +157,8 @@ def alocar_parcelas_agendadas(obra_id: int | None = None) -> int:
         (obra_id,) if obra_id is not None else ())
     for linha in mudancas:
         executar("UPDATE despesas SET dia_id = ? WHERE id = ?", (linha["novo_dia"], linha["id"]))
+    from .cobrancas import gerar
+    gerar(obra_id)
     return len(mudancas)
 
 
@@ -237,6 +239,13 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple,
         vencimentos = [_proxima_data(inicio, frequencia, i, intervalo) for i in range(parcelas)]
     inicio = vencimentos[0]
     grupo = uuid.uuid4().hex
+    # Parcela cuja sexta já passou entra hoje: na semana dela, já fechada, sumiria da planilha.
+    hoje = date.fromisoformat(hoje_iso())
+    segunda = hoje - timedelta(days=hoje.weekday())
+
+    def quando_pagar(vencimento: date) -> date:
+        sexta = dia_de_pagar(vencimento)
+        return hoje if lista and sexta < segunda else sexta
     descricao_base = despesa["descricao"] or ""
 
     def rotulo(n: int) -> str:
@@ -252,14 +261,14 @@ def gerar_parcelas(despesa_id: int, obra_id: int, config_parcelas: tuple,
                                vence_na_semana = ?, pagar_em = ?
             WHERE id = ?""",
         (valores[0], rotulo(1), inicio.isoformat(),
-         grupo, parcelas, 1 if lista else 0, dia_de_pagar(inicio).isoformat(), despesa_id))
+         grupo, parcelas, 1 if lista else 0, quando_pagar(inicio).isoformat(), despesa_id))
 
     criadas = [{"id": despesa_id, "numero": 1, "valor": valores[0],
-                "vencimento": inicio.isoformat(), "pagar_em": dia_de_pagar(inicio).isoformat()}]
+                "vencimento": inicio.isoformat(), "pagar_em": quando_pagar(inicio).isoformat()}]
 
     for indice in range(1, parcelas):
         vencimento = vencimentos[indice]
-        pagar = dia_de_pagar(vencimento).isoformat()
+        pagar = quando_pagar(vencimento).isoformat()
         # Sem a semana do pagamento, a parcela fica agendada no dia do lançamento.
         dia_id = _dia_do_vencimento(obra_id, pagar) or despesa["dia_id"]
 

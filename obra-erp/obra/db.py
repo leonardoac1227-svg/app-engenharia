@@ -581,6 +581,22 @@ CREATE TABLE IF NOT EXISTS locacao_parcelas (
 );
 
 CREATE INDEX IF NOT EXISTS idx_locacoes_obra ON locacoes (obra_id);
+CREATE TABLE IF NOT EXISTS cobrancas (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    obra_id INTEGER NOT NULL,
+    descricao TEXT NOT NULL,
+    fornecedor TEXT DEFAULT '',
+    categoria TEXT DEFAULT 'Outro',
+    valor REAL NOT NULL DEFAULT 0,
+    dia INTEGER NOT NULL DEFAULT 1,
+    lancado_ate TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ativa',
+    despesa_id INTEGER,
+    criado_em TEXT,
+    encerrada_em TEXT,
+    FOREIGN KEY (obra_id) REFERENCES obras (id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_parcelas_locacao ON locacao_parcelas (locacao_id);
 CREATE INDEX IF NOT EXISTS idx_parcelas_venc ON locacao_parcelas (vencimento);
 
@@ -686,6 +702,7 @@ COLUNAS_EXTRAS = [
     ("despesas", "vence_na_semana", "INTEGER DEFAULT 0"),
     ("despesas", "pagar_em", "TEXT"),
     ("despesas", "reembolsar_para", "TEXT DEFAULT ''"),
+    ("despesas", "cobranca_id", "INTEGER"),
     ("telegram_chats", "ocupado_ate", "TEXT"),
 ]
 

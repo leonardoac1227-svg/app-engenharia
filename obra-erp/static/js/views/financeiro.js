@@ -43,6 +43,123 @@ export function ligarLinksAnexo(raiz) {
 }
 
 let filtroStatus = 'todos';
+let aba = 'semana';   // 'semana' ou 'futuros'
+
+const htmlAbas = () => `
+  <div class="segmented" style="margin-bottom:14px">
+    <button type="button" data-aba-caixa="semana" class="${aba === 'semana' ? 'ativo' : ''}">Semana</button>
+    <button type="button" data-aba-caixa="futuros" class="${aba === 'futuros' ? 'ativo' : ''}">📅 Futuros</button>
+  </div>`;
+
+function ligarAbas(raiz) {
+  raiz.querySelectorAll('[data-aba-caixa]').forEach((btn) => {
+    btn.onclick = () => { aba = btn.dataset.abaCaixa; renderizar(raiz); };
+  });
+}
+
+/* Lançamentos de semanas que ainda não existem e cobranças que se repetem. */
+async function renderizarFuturos(raiz) {
+  raiz.innerHTML = esqueleto(3);
+  const d = await api.get(`/api/obras/${estado.obraId}/futuros`, { semCache: true });
+
+  const htmlItem = (x) => `
+    <div class="item" style="${x.tipo === 'previsto' ? 'opacity:.8' : ''}">
+      <div class="item-corpo">
+        <div class="item-titulo">${esc(x.descricao)}
+          ${x.cobranca_id ? `<span class="badge badge-neutro">COB ${x.cobranca_id}</span>` : ''}
+          <span class="badge ${x.tipo === 'previsto' ? 'badge-neutro' : 'badge-em-aberto'}">${x.tipo === 'previsto' ? 'previsto' : esc(x.status_pagamento)}</span>
+        </div>
+        <div class="item-sub">paga ${dataBR(x.pagar_em)}${x.vencimento ? ` · vence ${dataBR(x.vencimento)}` : ''}
+          ${x.fornecedor ? ' · ' + esc(x.fornecedor) : ''}${x.numero_nota ? ' · ' + esc(x.numero_nota) : ''}
+          ${x.parcela_total > 1 ? ` · parcela ${x.parcela_numero}/${x.parcela_total}` : ''}${x.id ? ` · #${x.id}` : ''}</div>
+        ${x.tipo === 'lancado' ? htmlAnexos(x) : ''}
+      </div>
+      <div class="item-valor">${moeda(x.valor)}</div>
+      ${x.tipo === 'lancado' ? `<div class="item-acoes">
+        ${x.cobranca_id || x.parcela_total > 1 || x.status_pagamento !== 'Em Aberto' ? '' : `<button class="icon-mini" data-repetir="${x.id}" title="Repete todo mês">↻</button>`}
+        <button class="icon-mini" data-editar="${x.id}" title="Editar">✎</button>
+        <button class="icon-mini" data-excluir="${x.id}" title="Excluir">🗑</button></div>` : ''}
+    </div>`;
+
+  raiz.innerHTML = `
+    <div class="section-head"><div><span class="eyebrow">FIN · CAIXA DA OBRA</span><h2>Lançamentos futuros</h2></div></div>
+    ${htmlAbas()}
+    <div class="kpi-grid">
+      ${kpi({ rotulo: 'Já lançado adiante', valor: moedaCurta(d.total_lancado), sub: `${d.lancados} conta(s)`, destaque: true })}
+      ${kpi({ rotulo: 'Cobranças mensais', valor: moedaCurta(d.por_mes), sub: `${d.cobrancas.length} ativa(s), por mês` })}
+    </div>
+
+    <div class="section-head"><h3>Cobranças que se repetem</h3></div>
+    <div class="lista">${d.cobrancas.length ? d.cobrancas.map((c) => `
+      <div class="item">
+        <div class="item-corpo">
+          <div class="item-titulo"><span class="badge badge-neutro">COB ${c.id}</span> ${esc(c.descricao)}</div>
+          <div class="item-sub">todo dia ${c.dia}${c.fornecedor ? ' · ' + esc(c.fornecedor) : ''}
+            · próxima: paga ${dataBR(c.pagar_em)} (vence ${dataBR(c.proximo)})</div>
+        </div>
+        <div class="item-valor">${moeda(c.valor)}</div>
+        <div class="item-acoes"><button class="btn btn-outline btn-small" data-encerrar="${c.id}">Encerrar</button></div>
+      </div>`).join('') : '<p class="vazio-inline">Nenhuma. Use o ↻ de uma conta em aberto ou diga ao bot: "esse boleto se repete todo mês".</p>'}
+    </div>
+    ${d.encerradas.length ? `<p class="small faint">Encerradas: ${d.encerradas.map((c) => `COB ${c.id} ${esc(c.descricao)}`).join(' · ')}</p>` : ''}
+
+    ${d.semanas.length ? d.semanas.map((s) => `
+      <div class="section-head"><h3>Semana de ${dataBR(s.inicio)} a ${dataBR(s.fim)}</h3><span class="small muted">${moeda(s.total)}</span></div>
+      <div class="lista">${s.itens.map(htmlItem).join('')}</div>`).join('')
+      : '<p class="vazio-inline">Nenhum lançamento para semanas futuras.</p>'}
+    <p class="small faint" style="margin-top:10px">"Previsto" ainda não é conta: vira lançamento quando a semana for criada.</p>`;
+
+  ligarAbas(raiz);
+  ligarLinksAnexo(raiz);
+  const itens = d.semanas.flatMap((s) => s.itens).filter((x) => x.tipo === 'lancado');
+  const atualizar = () => renderizar(raiz);
+  raiz.querySelectorAll('[data-editar]').forEach((b) => {
+    b.onclick = () => abrirModalDespesa(null, atualizar, itens.find((x) => String(x.id) === b.dataset.editar));
+  });
+  raiz.querySelectorAll('[data-excluir]').forEach((b) => {
+    b.onclick = async () => {
+      if (!await confirmar({ titulo: 'Excluir este lançamento?', texto: 'Os anexos também serão apagados.', perigo: true, confirmar: 'Excluir' })) return;
+      await api.del(`/api/despesas/${b.dataset.excluir}`);
+      toast('Lançamento removido.');
+      await atualizar();
+    };
+  });
+  raiz.querySelectorAll('[data-repetir]').forEach((b) => {
+    b.onclick = () => repetirTodoMes(itens.find((x) => String(x.id) === b.dataset.repetir), atualizar);
+  });
+  raiz.querySelectorAll('[data-encerrar]').forEach((b) => {
+    b.onclick = async () => {
+      const c = d.cobrancas.find((x) => String(x.id) === b.dataset.encerrar);
+      if (!await confirmar({ titulo: `Encerrar a cobrança ${c.id}?`, texto: `${c.descricao} não vai mais se repetir. O que já foi lançado continua.`, perigo: true, confirmar: 'Encerrar' })) return;
+      const r = await api.post(`/api/cobrancas/${c.id}/encerrar`, {});
+      toast(`Cobrança ${c.id} encerrada.${r.em_aberto.length ? ` Ainda em aberto: #${r.em_aberto.join(', #')}.` : ''}`, 'ok');
+      await atualizar();
+    };
+  });
+}
+
+/* Um lançamento passa a vir todo mês; sem vencimento, pergunta o dia. */
+function repetirTodoMes(x, aoSalvar) {
+  abrirModal(`
+    <h3>Repetir todo mês</h3>
+    <p class="small muted">${esc(x.descricao)} · ${moeda(x.valor)}. Vai ser programada todo mês, na sexta até o vencimento, até você encerrar.</p>
+    <label class="field-label">Vencimento deste boleto</label>
+    <input type="date" id="cobVenc" value="${esc((x.vencimento || '').slice(0, 10))}">
+    <div class="btn-linha">
+      <button class="btn btn-outline" id="cobCancelar">Cancelar</button>
+      <button class="btn btn-brass" id="cobSalvar">Repetir</button>
+    </div>`, (modal) => {
+    modal.querySelector('#cobCancelar').onclick = fecharModal;
+    modal.querySelector('#cobSalvar').onclick = async () => {
+      const vencimento = modal.querySelector('#cobVenc').value;
+      if (!vencimento) { toast('Informe o vencimento.', 'erro'); return; }
+      const c = await api.post(`/api/despesas/${x.id}/repetir`, { vencimento });
+      fecharModal();
+      toast(`Cobrança ${c.id} criada: todo dia ${c.dia}.`, 'ok');
+      await aoSalvar();
+    };
+  });
+}
 
 /** Modal de lançamento/edição de despesa — usado no diário e nesta view. */
 export function abrirModalDespesa(dia, aoSalvar, despesa = null) {
@@ -530,6 +647,7 @@ export async function renderizar(raiz) {
     return;
   }
   if (!estado.obraId) { raiz.innerHTML = vazio('＋', 'Selecione uma obra.'); return; }
+  if (aba === 'futuros') { await renderizarFuturos(raiz); return; }
   if (!estado.semanas.length) {
     raiz.innerHTML = `<div class="section-head"><h2>Caixa</h2></div>${htmlBarraSemana()}`;
     ligarBarraSemana(raiz);
@@ -564,6 +682,7 @@ export async function renderizar(raiz) {
       <div><span class="eyebrow">FIN · CAIXA DA OBRA</span><h2>Financeiro</h2></div>
       <button class="btn btn-brass btn-small" data-acao="nova-despesa">+ Lançar</button>
     </div>
+    ${htmlAbas()}
 
     <div class="kpi-grid">
       ${kpi({ rotulo: 'Em aberto', valor: moedaCurta(painel.total_em_aberto), sub: 'contas a pagar', estado: painel.total_em_aberto ? 'amarelo' : 'verde', destaque: true })}
@@ -599,6 +718,7 @@ export async function renderizar(raiz) {
           </div>
           <div class="item-valor">${moeda(x.valor)}</div>
           <div class="item-acoes">
+            ${x.status_pagamento === 'Em Aberto' && !(x.parcela_total > 1) && !x.cobranca_id ? `<button class="icon-mini" data-repetir="${x.id}" title="Repete todo mês">↻</button>` : ''}
             <button class="icon-mini" data-editar="${x.id}" title="Editar">✎</button>
             <button class="icon-mini" data-excluir="${x.id}" title="Excluir">🗑</button>
           </div>
@@ -640,6 +760,11 @@ export async function renderizar(raiz) {
   `;
 
   ligarBarraSemana(raiz);
+  ligarAbas(raiz);
+  raiz.querySelectorAll('[data-repetir]').forEach((b) => {
+    b.onclick = () => repetirTodoMes(fechamento.despesas.find((x) => String(x.id) === b.dataset.repetir),
+      () => recarregarSemana({ manterDia: true }));
+  });
   renderizarLocacoes(raiz);
 
   raiz.querySelectorAll('[data-filtro]').forEach((chip) => {

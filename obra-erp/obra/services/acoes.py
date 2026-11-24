@@ -546,6 +546,8 @@ def _n_despesa(d, ctx):
     if lista:
         # Datas e valores impressos na nota valem mais que dividir por intervalo.
         saida.update(parcelas_lista=lista, parcelas=0, valor=round(sum(p["valor"] for p in lista), 2))
+    if d.get("repete_mensal") is True and status == "Em Aberto":
+        saida["repete_mensal"] = True
     viagens = inteiro(d.get("frete_viagens"))
     if saida["categoria"] == "Frete" and texto(d.get("frete_transportador"), 120) and viagens > 1:
         datas = [data_ou(x, saida["data"]) for x in (d.get("frete_datas") or [])][:viagens]
@@ -553,7 +555,7 @@ def _n_despesa(d, ctx):
                      frete_datas=datas or [saida["data"]])
         saida["parcelas"] = 0
     freq_loc = sem_acento(str(d.get("locacao_frequencia") or ""))
-    if saida["categoria"] == "Locação" and freq_loc in FREQ_LOCACAO:
+    if saida["categoria"] == "Locação" and freq_loc in FREQ_LOCACAO and not saida.get("repete_mensal"):
         saida.update(locacao_frequencia=freq_loc, locacao_ciclos=max(inteiro(d.get("locacao_ciclos")), 1),
                      equipamento=texto(d.get("equipamento"), 160) or saida["descricao"])
         saida["parcelas"] = 0
@@ -583,6 +585,8 @@ def _e_despesa(ex, d, arq):
     dados["anexos"] = ex.arquivos(d.get("anexos"), arq)
     criada = ex.req("POST", f"/api/dias/{ex.dia(d['data'])}/despesas", dados=dados)
     ex.criadas.append(criada.get("id"))
+    if d.get("repete_mensal") and not criada.get("cobranca_id"):
+        ex.req("POST", f"/api/despesas/{criada['id']}/repetir", json={"vencimento": d.get("vencimento")})
 
 
 def _d_despesa(d):
@@ -595,6 +599,9 @@ def _d_despesa(d):
         partes.append(f"{len(d['parcelas_lista'])} vencimento(s): " + ", ".join(
             f"{data_br(p['vencimento'])} {moeda(p['valor'])} (paga {data_br(dia_de_pagar(date.fromisoformat(p['vencimento'])).isoformat())})"
             for p in d["parcelas_lista"]))
+    if d.get("repete_mensal"):
+        dia = (d.get("vencimento") or (d.get("parcelas_lista") or [{}])[0].get("vencimento") or "")[8:10]
+        partes.append("repete todo mês" + (f", dia {int(dia)}" if dia else " (falta dizer o dia do vencimento)"))
     if d.get("parcelas"):
         partes.append(f"{d['parcelas']}x {d['parcela_frequencia']}")
     if d.get("frete_viagens"):
@@ -615,13 +622,49 @@ _registrar(TipoAcao(
     "despesa", "Despesa",
     "data, categoria (uma de \"categorias\"), descricao (itens com quantidade + o que o usuário disse), "
     "fornecedor, valor (TOTAL final), status_pagamento (Pago | Em Aberto | Reembolso), numero_nota, "
-    "vencimento, linha_digitavel (só boleto), reembolsar_para, anexos (índices dos comprovantes), parcelas_lista [{vencimento, valor}] "
+    "vencimento, linha_digitavel (só boleto), repete_mensal (true = vem todo mês, só se o usuário disser), "
+    "faturada (true = o documento mostra venda a prazo), condicao_pagamento (como impressa: \"30/60\"), "
+    "data_documento (emissão), reembolsar_para, anexos (índices dos comprovantes), parcelas_lista [{vencimento, valor}] "
     "(cada vencimento impresso na nota a prazo, na ordem), parcelas + parcela_frequencia "
     "(parcelado sem datas impressas; valor = total), frete_transportador + frete_viagens + frete_datas (frete com várias "
     "viagens; valor = de CADA viagem), locacao_frequencia (diaria|semanal|quinzenal|mensal) + "
     "locacao_ciclos + equipamento (aluguel recorrente)",
     _n_despesa, _e_despesa, _d_despesa, permissao="financeiro",
     quando="compra, serviço, frete, aluguel, nota, cupom, recibo, comprovante de PIX"))
+
+
+def _cobranca_ativa(d, ctx) -> dict:
+    linha = um("SELECT id, descricao, fornecedor, valor, dia FROM cobrancas WHERE id = ? AND obra_id = ? "
+               "AND status = 'ativa'", (inteiro(d.get("cobranca_id")), ctx.obra_id))
+    if not linha:
+        raise Pular("Não achei essa cobrança mensal ativa nesta obra.")
+    return dict(linha)
+
+
+def _n_repetir_cobranca(d, ctx):
+    atual = _despesa(d, ctx)
+    venc = data_ou(d.get("vencimento"), "") or str(atual.get("vencimento") or "")[:10]
+    if not venc:
+        raise Pular(f"Para repetir o #{atual['id']} todo mês, diga em que dia ele vence.")
+    return {"despesa_id": atual["id"], "descricao": atual["descricao"], "valor": float(atual["valor"] or 0),
+            "vencimento": venc}
+
+
+_registrar(TipoAcao(
+    "repetir_cobranca", "Cobrança mensal", "despesa_id (lançamento que já existe), vencimento (se dito)",
+    _n_repetir_cobranca,
+    lambda ex, d, arq: ex.req("POST", f"/api/despesas/{d['despesa_id']}/repetir", json={"vencimento": d["vencimento"]}),
+    lambda d: f"#{d['despesa_id']} {d['descricao']} ({moeda(d['valor'])}) repete todo mês, dia {int(d['vencimento'][8:10])}",
+    permissao="financeiro",
+    quando="um lançamento JÁ EXISTENTE vai se repetir todo mês (\"o #275 vem todo mês\")"))
+
+_registrar(TipoAcao(
+    "encerrar_cobranca", "Encerrar cobrança mensal", "cobranca_id (o número da cobrança, de cobrancas_mensais)",
+    lambda d, ctx: _cobranca_ativa(d, ctx),
+    lambda ex, d, arq: ex.req("POST", f"/api/cobrancas/{d['id']}/encerrar"),
+    lambda d: f"Cobrança {d['id']} encerrada: {d['descricao']} ({moeda(d['valor'])}) não vem mais",
+    permissao="financeiro",
+    quando="\"a cobrança 3 não vai ter mais\", \"acabou o aluguel das escoras\", \"devolvi os andaimes\""))
 
 
 def _n_editar_despesa(d, ctx):
@@ -910,11 +953,12 @@ ESQUEMA_DADOS = {
         **{k: _S for k in ("data", "producao_dia", "clima", "observacoes", "nome", "funcao", "telefone",
                            "documento", "chave_pix", "vinculo", "classe", "legenda", "ambiente", "categoria", "descricao",
                            "fornecedor", "status_pagamento", "numero_nota", "vencimento", "reembolsar_para",
-                           "linha_digitavel", "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
+                           "linha_digitavel", "condicao_pagamento", "data_documento", "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
                            "pago_em", "meta", "formato", "mover_para_data")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
-                           "parcela_id", "locacao_id", "ciclos", "mover_para_obra")},
+                           "parcela_id", "locacao_id", "ciclos", "mover_para_obra", "cobranca_id")},
         "valor": _N, "orcamento_previsto": _N, "horas": _N, "diaria": _N, "justificativa": _S,
+        "repete_mensal": _B, "faturada": _B,
         "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},
         "frete_datas": {"type": "array", "items": _S},

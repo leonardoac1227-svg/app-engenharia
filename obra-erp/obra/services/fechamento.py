@@ -199,7 +199,7 @@ def dados_fechamento(semana_id: int) -> dict:
         data_por_id = {d["id"]: d["data"] for d in dias}
         for r in todos(
             f"""SELECT x.id, x.dia_id, x.categoria, x.descricao, x.fornecedor, x.valor,
-                       x.status_pagamento, x.numero_nota, x.vencimento, x.pago_em, x.imagem_path,
+                       x.status_pagamento, x.numero_nota, x.vencimento, x.pago_em, x.imagem_path, x.cobranca_id,
                        x.nome_arquivo, x.reembolsar_para, x.grupo_tipo, x.parcela_numero,
                        x.parcela_total
                   FROM despesas x JOIN dias d ON d.id = x.dia_id

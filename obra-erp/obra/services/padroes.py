@@ -130,6 +130,14 @@ def fornecedor_padrao(nome) -> str:
         limpo = curto
 
 
+# Entram sempre na semana em que o gestor manda, mesmo com a nota faturada ou com boleto.
+SEMPRE_NA_SEMANA = ("Inova civil",)
+
+
+def sempre_na_semana(fornecedor) -> bool:
+    return fornecedor_padrao(fornecedor) in SEMPRE_NA_SEMANA
+
+
 def _separar_numero(saida: dict) -> None:
     """Número do documento escrito na descrição vai para o campo próprio.
 

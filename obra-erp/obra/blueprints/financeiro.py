@@ -16,6 +16,7 @@ from ..db import executar, registrar_auditoria, todos, um
 from ..security import (exigir_financeiro, garantir_acesso_obra, login_obrigatorio,
                         obra_da_despesa, obra_do_dia)
 from ..services import anexos_despesa
+from ..services import cobrancas
 from ..services.locacoes import criar_locacao
 from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
 from ..services.fretes import validar as validar_frete
@@ -143,6 +144,12 @@ def criar(dia_id: int):
     _barrar_nota_duplicada(obra_id, numero_nota, fornecedor,
                            request.form.get("confirmar_duplicidade") in ("1", "true", "True"))
 
+    # Boleto do mês de uma cobrança que se repete: não pode entrar duas vezes.
+    mensal = cobrancas.do_mes(obra_id, fornecedor, valor, vencimento) if vencimento and fornecedor else {}
+    if mensal.get("lancado") and request.form.get("confirmar_duplicidade") not in ("1", "true", "True"):
+        raise ApiErro(f"Esse boleto já está lançado: é o #{mensal['lancado']['id']}, da cobrança mensal "
+                      f"{mensal['lancado']['cobranca']}.", 409, "nota_duplicada")
+
     # Vários arquivos vêm em "anexos"; "imagem"/"anexo" é o envio de um só,
     # das versões anteriores do app (ainda abertas em algum celular).
     uploads = [*request.files.getlist("anexos"),
@@ -179,6 +186,9 @@ def criar(dia_id: int):
                             f"{moeda(resposta_parcelas['valor_parcela'])}")
 
     resposta = {"id": cur.lastrowid}
+    if mensal.get("livre") and status == "Em Aberto":
+        cobrancas.vincular(mensal["livre"]["id"], cur.lastrowid, vencimento)
+        resposta["cobranca_id"] = mensal["livre"]["id"]
     if frete:
         resposta["frete"] = resposta_frete
     if parcelamento:
@@ -408,6 +418,42 @@ def painel_financeiro(obra_id: int):
         "maiores_fornecedores": maiores_fornecedores,
         "categorias_sugeridas": CATEGORIAS_PADRAO,
     })
+
+
+@bp.get("/obras/<int:obra_id>/futuros")
+def ver_futuros(obra_id: int):
+    """Lançamentos de semanas que ainda não existem e as cobranças que se repetem."""
+    exigir_financeiro()
+    garantir_acesso_obra(obra_id)
+    dados = cobrancas.futuros(obra_id)
+    lancados = [i for s in dados["semanas"] for i in s["itens"] if i["tipo"] == "lancado"]
+    anexos_despesa.anexar_lista(lancados)
+    return jsonify(dados)
+
+
+def _cobranca_permitida(cobranca_id: int) -> dict:
+    c = cobrancas.um_por_id(cobranca_id)
+    garantir_acesso_obra(c["obra_id"])
+    return c
+
+
+@bp.post("/despesas/<int:despesa_id>/repetir")
+def repetir_todo_mes(despesa_id: int):
+    usuario = exigir_financeiro()
+    obra_da_despesa(despesa_id)
+    dados = request.get_json(silent=True) or {}
+    c = cobrancas.repetir(despesa_id, dados.get("vencimento"))
+    registrar_auditoria(usuario, "repetiu_cobranca", "despesa", despesa_id, f"cobrança {c['id']}")
+    return jsonify(c), 201
+
+
+@bp.post("/cobrancas/<int:cobranca_id>/encerrar")
+def encerrar_cobranca(cobranca_id: int):
+    usuario = exigir_financeiro()
+    _cobranca_permitida(cobranca_id)
+    c = cobrancas.encerrar(cobranca_id)
+    registrar_auditoria(usuario, "encerrou_cobranca", "cobranca", cobranca_id, c["descricao"])
+    return jsonify({"ok": True, "em_aberto": c["em_aberto"]})
 
 
 @bp.get("/despesas/<int:despesa_id>/parcelas")

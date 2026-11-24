@@ -211,6 +211,7 @@ CREATE TABLE IF NOT EXISTS despesas (
     imagem_path TEXT DEFAULT '',
     nome_arquivo TEXT DEFAULT '',
     reembolsar_para TEXT DEFAULT '',
+    cobranca_id BIGINT,
     criado_por BIGINT,
     criado_em TEXT NOT NULL
 );
@@ -335,6 +336,21 @@ CREATE TABLE IF NOT EXISTS locacao_parcelas (
 );
 
 CREATE INDEX IF NOT EXISTS idx_locacoes_obra ON locacoes (obra_id);
+CREATE TABLE IF NOT EXISTS cobrancas (
+    id BIGSERIAL PRIMARY KEY,
+    obra_id BIGINT NOT NULL REFERENCES obras (id) ON DELETE CASCADE,
+    descricao TEXT NOT NULL,
+    fornecedor TEXT DEFAULT '',
+    categoria TEXT DEFAULT 'Outro',
+    valor DOUBLE PRECISION NOT NULL DEFAULT 0,
+    dia INTEGER NOT NULL DEFAULT 1,
+    lancado_ate TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'ativa',
+    despesa_id BIGINT,
+    criado_em TEXT,
+    encerrada_em TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_parcelas_locacao ON locacao_parcelas (locacao_id);
 CREATE INDEX IF NOT EXISTS idx_parcelas_venc ON locacao_parcelas (vencimento);
 
@@ -411,6 +427,7 @@ ALTER TABLE contratos         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE contrato_medicoes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE locacoes          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE locacao_parcelas  ENABLE ROW LEVEL SECURITY;
+ALTER TABLE cobrancas         ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_chats    ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_codigos  ENABLE ROW LEVEL SECURITY;
 ALTER TABLE telegram_arquivos ENABLE ROW LEVEL SECURITY;
@@ -428,7 +445,7 @@ SELECT setval(pg_get_serial_sequence(t, 'id'),
 TABELAS_COM_ID = [
     "usuarios", "obras", "etapas", "semanas", "funcionarios", "dias",
     "fotos", "horas", "medicoes", "despesas", "despesa_anexos", "auditoria", "metas",
-    "meta_progresso", "contratos", "contrato_medicoes", "locacoes", "locacao_parcelas",
+    "meta_progresso", "contratos", "contrato_medicoes", "locacoes", "locacao_parcelas", "cobrancas",
 ]
 
 

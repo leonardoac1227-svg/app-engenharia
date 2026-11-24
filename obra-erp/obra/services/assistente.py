@@ -30,7 +30,7 @@ from ..db import liberar_leitura, todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
 from . import boleto, ia_provedores, padroes
-from .parcelamento import dia_de_pagar
+from .parcelamento import dia_de_pagar, dividir_valor
 
 log = logging.getLogger(__name__)
 
@@ -149,13 +149,28 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
   paga nesta semana entra hoje. Não preencha parcelas_lista nem locacao_frequencia só por causa do boleto.
   Se o usuário disser o dia ("lançar no dia 11/12"), esse dia vai em "data" e o impresso em "vencimento".
 - Número do documento sempre em numero_nota, nunca na descrição. Recibo: "REC 1191".
+- NOTA FATURADA, lida do documento: se ele mostrar venda a prazo — "faturado", "a prazo", "condição de
+  pagamento 30/60", "30 DDL", "28/56 dias", boleto a vencer ou quadro DUPLICATAS/FATURA com data depois da
+  emissão — marque faturada true, MESMO que o usuário não diga nada, e preencha:
+  - parcelas_lista com cada vencimento e valor, se o documento imprime as datas;
+  - senão, condicao_pagamento só com os prazos ("30/60") e data_documento com a emissão: o app calcula as datas.
+  "À vista", "dinheiro", "PIX", "cartão", "pago", duplicata no próprio dia da emissão: faturada false. Não
+  deduza prazo pelo fornecedor: só o que está escrito. Inova civil entra sempre na semana em que é enviada (o app
+  cuida disso), mesmo faturada, salvo se o usuário pedir para parcelar ou programar.
+- COBRANÇA MENSAL: "esse boleto vai se repetir todo mês", "vem todo dia 22", "é mensal até acabar a obra", "todo
+  mês tem esse": a despesa com repete_mensal true (e vencimento). Se o lançamento JÁ existe ("os boletos da
+  Locmaq que mandei hoje se repetem"), um repetir_cobranca por lançamento citado. Com número de vezes ("em 3x")
+  é parcelamento, não cobrança mensal. Boleto de "locação mensal" sem o usuário dizer que repete: não repete.
+  - "A cobrança 3 não vai ter mais", "COB 3 acabou", "devolvi as escoras, não vem mais boleto":
+    encerrar_cobranca com o número (ou a única de cobrancas_mensais que corresponde; na dúvida, pergunte qual).
+  - Boleto novo de uma cobrança que já está em cobrancas_mensais: despesa normal, sem repete_mensal. O app liga
+    ao mês certo e não duplica.
 - NOTA A PRAZO / PARCELADA (quando o usuário disser "parcelada", "em 3x", "a prazo", "tem boleto",
   "vencimentos", "parcelas"): leia o quadro "PARCELAS", "DUPLICATAS" ou "FATURA" do documento e preencha
   parcelas_lista com cada vencimento e valor exatamente como impressos, na ordem (mesmo que seja uma
   parcela só). valor = total da nota. Copie o vencimento como impresso: o app põe cada parcela sozinho na
   semana em que ela é paga (a sexta antes do vencimento). Sem quadro
-  impresso, use parcelas + parcela_frequencia ditos pelo usuário. Sem o usuário falar em parcela, não
-  preencha parcelas_lista: o primeiro vencimento vai só em "vencimento".
+  impresso, use parcelas + parcela_frequencia ditos pelo usuário.
 - Descrição no estilo da empresa: curta, o que foi comprado + para quê. Quantidade quando ajuda; sem marca,
   código, medida técnica de catálogo ou preço. Muitos itens: os 2 ou 3 principais e "materiais diversos".
   Bom: "6kg de pregos para execução de vigas e pilares", "Discos de corte para telas da laje",
@@ -363,6 +378,9 @@ def _contexto_obra(obra: dict, referencia: str, pode_financeiro: bool) -> dict:
         ctx["contas_em_aberto"] = {
             "ids_que_estao_em_lancamentos_recentes": [a["id"] for a in abertas if a["id"] in ja],
             "outras": _tabela([a for a in abertas if a["id"] not in ja])}
+        from .cobrancas import listar as listar_cobrancas
+        ctx["cobrancas_mensais"] = [{k: c[k] for k in ("id", "descricao", "fornecedor", "valor", "dia", "proximo")}
+                                    for c in listar_cobrancas(obra_id)]
         if semana:
             total = um("""SELECT COALESCE(SUM(x.valor), 0) AS t,
                                  COALESCE(SUM(CASE WHEN x.status_pagamento = 'Em Aberto' THEN x.valor ELSE 0 END), 0) AS a
@@ -491,12 +509,83 @@ def _lancar_na_data_certa(acoes: list[dict], mensagem: str, referencia: str) -> 
         data = catalogo.data_ou(dados.get("data"), "")
         if data > referencia:
             dados.setdefault("vencimento", data)
-            if dita and not dados.get("parcelas_lista"):
+            if dita and (not dados.get("parcelas_lista") or dados.get("faturada") is True):
+                dados["_dia_dito"] = True   # o dia que o gestor ditou vale mais que o impresso
                 # "Programe para o dia 20" é conta a pagar nesse dia: entra na
                 # semana em que é paga, sem criar semana futura antes da hora.
                 dados["parcelas_lista"] = [{"vencimento": data, "valor": dados.get("valor")}]
         if not dita or data > referencia:
             dados["data"] = referencia
+
+
+def _prazos(condicao) -> list[int]:
+    """"30/60/90 dias", "28 DDL", "30 e 60" → [30, 60, 90]. "À vista" ou "2x" → []."""
+    if re.search(r"entrada|sinal|\bato\b|vista|%", catalogo.sem_acento(str(condicao or ""))):
+        return []   # parte paga na hora: dividir tudo pelos prazos cobraria errado
+    dias = [int(n) for n in re.findall(r"\d+", str(condicao or ""))]
+    if not dias or len(dias) > 12 or any(not 5 <= n <= 365 for n in dias) or dias != sorted(set(dias)):
+        return []
+    return dias
+
+
+# Pedido para usar a data que está no papel ("segue a data impressa", "na planilha correspondente").
+_SEGUIR_IMPRESSA = re.compile(
+    r"\b(segu\w+|sig\w+|respeit\w+|conforme|de acordo com|usa\w*|use)\b.{0,30}\b(data|datas|vencimentos?)\b"
+    r"|\bdatas? (que (esta|ta|tem) )?(impressas?|na nota|da nota|no boleto|do boleto|do vencimento)\b"
+    r"|\bno (dia do )?vencimento\b|\b(semana|planilha|data) corresp\w*")
+# Com a Inova, só programa se o gestor pedir a programação; "boleto" ou "vencimento" não bastam.
+_PEDIU_PRAZO = re.compile(r"\bparcel\w*|\b\d{1,2}\s*x\b|\b\d{1,2} vezes\b|\ba prazo\b|\bprogram\w*|"
+                          + _SEGUIR_IMPRESSA.pattern)
+
+
+def _programar_faturadas(acoes: list[dict], mensagem: str, referencia: str) -> None:
+    """Nota faturada vai para as semanas em que é paga, mesmo sem o gestor falar em parcela.
+
+    As datas impressas valem; sem elas, contam-se os prazos a partir da emissão.
+    Nota com tudo a pagar nesta semana, ou vencida, fica em hoje.
+    """
+    fala = catalogo.sem_acento(fala_do_usuario(mensagem))
+    hoje = date.fromisoformat(referencia[:10])
+    domingo = hoje + timedelta(days=6 - hoje.weekday())
+    for dados in _despesas(acoes):
+        if dados.pop("_dia_dito", False):
+            continue
+        if _SEGUIR_IMPRESSA.search(fala) and not dados.get("parcelas_lista"):
+            impresso = catalogo.data_ou(dados.get("vencimento"), "")
+            if impresso > referencia and not _prazos(dados.get("condicao_pagamento")):
+                dados["parcelas_lista"] = [{"vencimento": impresso, "valor": dados.get("valor")}]
+            dados["faturada"] = True
+        if dados.get("faturada") is not True:
+            continue
+        if padroes.sempre_na_semana(dados.get("fornecedor")) and not _PEDIU_PRAZO.search(fala):
+            datas = [catalogo.data_ou(p.get("vencimento"), "") for p in dados.pop("parcelas_lista", None) or []
+                     if isinstance(p, dict)]
+            if any(datas) and not dados.get("vencimento"):
+                dados["vencimento"] = min(d for d in datas if d)
+            continue
+        lista = [p for p in dados.get("parcelas_lista") or [] if isinstance(p, dict)
+                 and catalogo.data_ou(p.get("vencimento"), "") and catalogo.valor(p.get("valor")) > 0]
+        total = catalogo.valor(dados.get("valor"))
+        if lista and total > 0 and abs(sum(catalogo.valor(p["valor"]) for p in lista) - total) > 0.05:
+            lista = []   # a soma não fecha com a nota: alguma parcela foi lida errada
+        prazos = [] if lista else _prazos(dados.get("condicao_pagamento"))
+        if prazos and total > 0:
+            emissao = date.fromisoformat(catalogo.data_ou(dados.get("data_documento"), referencia))
+            if not 0 <= (hoje - emissao).days <= 60:
+                emissao = hoje   # emissão ilegível ou do ano errado
+            lista = [{"vencimento": (emissao + timedelta(days=n)).isoformat(), "valor": v}
+                     for n, v in zip(prazos, dividir_valor(total, len(prazos)))]
+        dados.pop("parcelas_lista", None)
+        if not lista:
+            continue
+        dados["vencimento"] = min(p["vencimento"] for p in lista)
+        pago = catalogo.status_pagamento(dados.get("status_pagamento")) in ("Pago", "Reembolso")
+        if pago or _FICA_NA_SEMANA.search(fala):
+            continue
+        if any(dia_de_pagar(date.fromisoformat(p["vencimento"])) > domingo for p in lista):
+            dados["data"] = referencia
+            dados["parcelas_lista"] = lista
+            dados.pop("parcelas", None)
 
 
 _FICA_NA_SEMANA = re.compile(r"\b(hoje|ontem|anteontem|essa semana|esta semana|nessa semana|nesta semana"
@@ -541,6 +630,11 @@ def _programar_boletos(acoes: list[dict], mensagem: str, referencia: str, arquiv
             continue
 
         impresso = boletos[0]["vencimento"]
+        if padroes.sempre_na_semana(dados.get("fornecedor")) and not _PEDIU_PRAZO.search(fala) \
+                and not _data_foi_dita(mensagem):
+            dados["vencimento"] = impresso
+            dados.pop("parcelas_lista", None)
+            continue
         if catalogo.valor(dados.get("valor")) <= 0:
             dados["valor"] = boletos[0]["valor"]
         programado = [{"vencimento": impresso, "valor": dados.get("valor")}]
@@ -673,12 +767,16 @@ def status_dito(mensagem: str) -> tuple[str, str]:
 def _parcelamento_so_se_dito(acoes: list[dict], mensagem: str) -> None:
     """Toda nota a prazo imprime o quadro de duplicatas, mas a empresa lança a maioria no dia da compra.
 
-    Só com o gestor falando em parcela o lançamento vai para as semanas dos
-    vencimentos; senão o primeiro vencimento fica guardado como "vencimento".
+    O lançamento vai para as semanas dos vencimentos quando o gestor fala em
+    parcela ou quando o documento mostra que a nota é faturada; senão o primeiro
+    vencimento fica guardado como "vencimento".
     """
-    if _FALA_DE_PARCELA.search(catalogo.sem_acento(fala_do_usuario(mensagem))):
+    fala = catalogo.sem_acento(fala_do_usuario(mensagem))
+    if _FALA_DE_PARCELA.search(fala) or _SEGUIR_IMPRESSA.search(fala):
         return
     for dados in _despesas(acoes):
+        if dados.get("faturada") is True:
+            continue
         lista = dados.pop("parcelas_lista", None)
         if isinstance(lista, list) and lista and isinstance(lista[0], dict) and not dados.get("vencimento"):
             dados["vencimento"] = lista[0].get("vencimento")
@@ -698,7 +796,11 @@ def _obra_do_lancamento(acao: dict, ids: set[int]) -> int:
     """Correção vale na obra do lançamento citado, seja qual for a obra da conversa."""
     if acao.get("tipo") == "transferir_funcionario":
         return _obra_de_quem_sai(acao.get("dados") or {}, ids)
-    if acao.get("tipo") not in ("editar_despesa", "pagar_despesa", "excluir_despesa"):
+    if acao.get("tipo") == "encerrar_cobranca":
+        c = um("SELECT obra_id FROM cobrancas WHERE id = ?",
+               (catalogo.inteiro((acao.get("dados") or {}).get("cobranca_id")),))
+        return c["obra_id"] if c and c["obra_id"] in ids else 0
+    if acao.get("tipo") not in ("editar_despesa", "pagar_despesa", "excluir_despesa", "repetir_cobranca"):
         return 0
     despesa_id = catalogo.inteiro((acao.get("dados") or {}).get("despesa_id"))
     linha = um("""SELECT s.obra_id FROM despesas x JOIN dias d ON d.id = x.dia_id
@@ -779,6 +881,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     _aplicar_status_dito(acoes_brutas, mensagem)
     _parcelamento_so_se_dito(acoes_brutas, mensagem)
     _lancar_na_data_certa(acoes_brutas, mensagem, referencia)
+    _programar_faturadas(acoes_brutas, mensagem, referencia)
     _programar_boletos(acoes_brutas, mensagem, referencia, arquivos)
     _ponto_nos_dias_ditos(acoes_brutas, mensagem, referencia)
 

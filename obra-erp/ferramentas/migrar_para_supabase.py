@@ -38,7 +38,7 @@ ORDEM = [
     "usuarios", "obras", "usuario_obras", "etapas", "semanas", "funcionarios",
     "dias", "fotos", "horas", "medicoes", "despesas", "despesa_anexos", "auditoria",
     "metas", "meta_progresso", "contratos", "contrato_medicoes",
-    "locacoes", "locacao_parcelas",
+    "locacoes", "locacao_parcelas", "cobrancas",
 ]
 
 TABELAS_COM_ID = [t for t in ORDEM if t != "usuario_obras"]
