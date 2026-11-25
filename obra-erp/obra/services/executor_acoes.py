@@ -20,7 +20,7 @@ from ..utils import hoje_iso
 from .acoes import CATALOGO
 
 BASE_INTERNA = "https://assistente.interno"
-ORDEM = ["editar_obra", "transferir_funcionario", "funcionario", "editar_funcionario", "semana", "diario", "repetir_ponto", "ponto",
+ORDEM = ["criar_obra", "editar_obra", "transferir_funcionario", "funcionario", "editar_funcionario", "semana", "diario", "repetir_ponto", "ponto",
          "foto", "despesa", "editar_despesa", "pagar_despesa", "repetir_cobranca", "encerrar_cobranca", "locacao_lancar", "locacao_prorrogar",
          "locacao_encerrar", "excluir_despesa", "pagar_semana", "pagar_folha", "fechar_semana", "relatorio"]
 EXTENSOES = {"image/jpeg": "jpg", "image/png": "png", "image/webp": "webp", "image/heic": "heic",

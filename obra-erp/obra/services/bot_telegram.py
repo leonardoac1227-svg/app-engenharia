@@ -54,6 +54,7 @@ VALIDADE_FILA = timedelta(hours=1)        # arquivo esperando instrução
 VALIDADE_TENTATIVA = timedelta(hours=12)  # arquivo de tentativa que falhou (botão "tentar de novo")
 VALIDADE_CODIGO = timedelta(minutes=20)
 VALIDADE_CONVITE = timedelta(days=3)
+VALIDADE_OBRA_NOVA = timedelta(hours=12)   # cadastro de obra parado no meio
 OCUPADO_POR = timedelta(minutes=5)   # teto de um processamento (IA + gravação)
 ESPERA_MAXIMA = 300                  # segundos esperando a mensagem anterior terminar
 MAX_HISTORICO = 8
@@ -73,6 +74,7 @@ AJUDA = """Sou o assistente da obra e faço tudo que o app faz. Fale do jeito qu
 💰 "Essa nota está em aberto", "passa para reembolso", "paguei o boleto da areia", "frete de 3 viagens"...
 ✏️ Corrigir: "o valor da última nota é 150", "muda o fornecedor do #212", "esse lançamento é do O13".
 👷 "Cadastra o Marcos, armador", "o João saiu da obra".
+🏗 "Quero criar uma obra", "entrou uma obra nova": pergunto nome, início, término, cliente e endereço, e cadastro.
 📊 "Me manda o relatório da semana", "quanto gastei essa semana?"
 
 Pode mandar só a foto: eu analiso sozinho. Se quiser explicar, mande o áudio ou texto logo depois (ou na legenda).
@@ -484,7 +486,7 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
     _conferir_limite(v["usuario_id"])
 
     obras = obras_do_usuario(v["usuario_id"], v["papel"])
-    if not obras:
+    if not obras and v["papel"] != "gestor":
         telegram_api.enviar(chat_id, "Você ainda não tem obras no app.")
         return
 
@@ -524,11 +526,18 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
     else:
         incompletos = []
 
+    rascunho = _rascunho_obra(v)
+    if rascunho and not sem_instrucao:
+        sabe = catalogo._d_criar_obra(rascunho["dados"])
+        falta = ", ".join(r for c, r in catalogo.CAMPOS_OBRA_NOVA if not rascunho["dados"].get(c))
+        mensagem += f"\n(Obra nova em cadastro — {sabe}. Perguntado: {falta}.)".replace("(sem nome)", "sem nome")
+
     pf, pg = _perfil(v)
     inicio = time.monotonic()
     resultado = assistente.interpretar(
         obras, mensagem, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
-        obra_padrao=obra_conversa, prazo=PRAZO_IA, reembolso=reembolso.padrao_de(v["usuario_id"]))
+        obra_padrao=obra_conversa, prazo=PRAZO_IA, reembolso=reembolso.padrao_de(v["usuario_id"]),
+        separar_obra_nova=True)
     log.info("Telegram %s: IA em %.1fs (%s %s)", chat_id, time.monotonic() - inicio,
              resultado["fonte"], resultado["modelo"])
 
@@ -555,7 +564,16 @@ def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict]
                texto_msg: str) -> None:
     """Grava as ações, guarda o que espera decisão e responde."""
     linhas, botoes = [], []
+    depois = None   # (obra criada, o que a conversa pediu para fazer nela)
     for acao in ordenar(resultado["acoes"]):
+        if acao["tipo"] == "criar_obra":
+            linha, botoes_obra, depois = _cadastrar_obra(app, chat_id, v, acao["dados"],
+                                                         resultado.get("acoes_da_obra_nova") or [], arquivos)
+            linhas.append(linha)
+            botoes += botoes_obra
+            if not linha.startswith("✅"):
+                resultado["resposta"] = ""   # a pergunta já está na linha
+            continue
         alvo = acao.get("obra_id") or obra_id
         if acao["confirmar"] or acao["dados"].get("faltando"):
             copia, refs = _arquivos_para_pendente(acao, arquivos)
@@ -599,7 +617,78 @@ def _finalizar(app, chat_id: str, v: dict, resultado: dict, arquivos: list[dict]
         partes.append("\n".join(linhas))
     if resultado.get("avisos"):
         partes.append("\n".join(f"• {a}" for a in resultado["avisos"]))
-    telegram_api.enviar(chat_id, "\n\n".join(partes), botoes or None)
+    telegram_api.enviar(chat_id, "\n\n".join(p for p in partes if p), botoes or None)
+    _fazer_na_obra_nova(app, chat_id, v, depois)
+
+
+# ---------------------------------------------------------------- obra nova
+
+def _rascunho_obra(v: dict) -> dict | None:
+    """Cadastro de obra que está sendo perguntado. Esquecido por um dia, não atrapalha outra conversa."""
+    limite = (datetime.now() - VALIDADE_OBRA_NOVA).isoformat(timespec="seconds")
+    return next((p for p in reversed(v["pendentes"])
+                 if p.get("motivo") == "obra_nova" and p.get("criado_em", "") >= limite), None)
+
+
+def _cadastrar_obra(app, chat_id: str, v: dict, dados: dict, acoes: list[dict], arquivos: list[dict]):
+    """Junta o que já foi dito e cria a obra, ou pergunta o que falta. Devolve (linha, botões, depois)."""
+    rascunho = _rascunho_obra(v) or {"dados": {}, "grupos": [], "perguntas": 0}
+    v["pendentes"] = [p for p in v["pendentes"] if p.get("motivo") != "obra_nova"]
+    if dados.get("cancelar"):
+        return "❌ Cadastro da obra cancelado.", [], None
+    juntos = {**rascunho["dados"], **{c: dados[c] for c, _ in catalogo.CAMPOS_OBRA_NOVA if dados.get(c)}}
+    grupos = list(rascunho["grupos"])
+    if acoes:
+        grupos.append({"acoes": acoes, "arquivos": [{k: a[k] for k in ("file_id", "mime", "nome")} for a in arquivos]})
+
+    avisos = ""
+    inicio, fim = juntos.get("data_inicio"), juntos.get("previsao_fim")
+    if inicio and fim and fim < inicio:
+        juntos.pop("previsao_fim")
+        avisos = "\n⚠️ O término ficou antes do início. Confirme a data de término."
+    falta = [c for c in catalogo.OBRIGATORIOS_OBRA_NOVA if not juntos.get(c)]
+    pode = dados.get("pode_criar") or rascunho["perguntas"] >= 2
+    if juntos.get("nome") and (not falta or pode):
+        return _criar_obra(app, v, juntos, grupos)
+
+    pendente = _novo_pendente(v, "obra_nova", dados=juntos, grupos=grupos, perguntas=rascunho["perguntas"] + 1,
+                              criado_em=agora_iso())
+    ja = [f"• {rotulo}: {data_br(juntos[c]) if c in ('data_inicio', 'previsao_fim') else juntos[c]}"
+          for c, rotulo in catalogo.CAMPOS_OBRA_NOVA if juntos.get(c)]
+    pedir = [f"• {rotulo}" + ("" if c in catalogo.OBRIGATORIOS_OBRA_NOVA else " (se já tiver)")
+             for c, rotulo in catalogo.CAMPOS_OBRA_NOVA if not juntos.get(c)]
+    linha = "🏗 Vamos cadastrar a obra nova." + ("\nJá anotei:\n" + "\n".join(ja) if ja else "") + avisos \
+        + "\nMe diga, numa mensagem só ou aos poucos:\n" + "\n".join(pedir)
+    botoes = [{"text": "Cancelar", "callback_data": f"no:{pendente['id']}"}]
+    if juntos.get("nome"):
+        botoes.insert(0, {"text": "Criar assim mesmo", "callback_data": f"cr:{pendente['id']}"})
+    return linha, [botoes], None
+
+
+def _criar_obra(app, v: dict, dados: dict, grupos: list[dict]):
+    sem_inicio = not dados.get("data_inicio")
+    dados = {**dados, "data_inicio": dados.get("data_inicio") or hoje_iso()}
+    if dados.get("previsao_fim") and dados["previsao_fim"] < dados["data_inicio"]:
+        dados.pop("previsao_fim")
+    try:
+        nova = Executor(app, v["usuario_id"], 0).gravar({"tipo": "criar_obra", "dados": dados}, [])["obra_nova"]
+    except ErroAcao as erro:
+        return f"⚠️ Obra nova: {erro.mensagem}", [], None
+    linha = "✅ " + catalogo._d_criar_obra(dados).replace("Obra nova:", "Obra criada:")
+    if sem_inicio:
+        linha += "\nSem data dita, o início ficou hoje."
+    falta = [rotulo for c, rotulo in catalogo.CAMPOS_OBRA_NOVA if not dados.get(c)]
+    if falta:
+        linha += f"\nFicou sem {', '.join(falta)}. Quando tiver, é só me dizer."
+    return linha, [], (nova, grupos)
+
+
+def _fazer_na_obra_nova(app, chat_id: str, v: dict, depois) -> None:
+    """"Cria a obra O20 e cadastra o Pedro nela": o resto do pedido, com a obra já criada."""
+    for grupo in (depois[1] if depois else []):
+        atual = vinculo(chat_id) or v
+        _escolher_obra(app, chat_id, atual, {"acoes": [{"bruta": a} for a in grupo["acoes"]],
+                                             "arquivos": grupo["arquivos"]}, depois[0])
 
 
 def _aviso_de_semana(acao: dict) -> str:
@@ -685,6 +774,21 @@ def tratar_botao(app, callback: dict) -> None:
             return
         try:
             _resolver_pendente(app, chat_id, v, pendente)
+        finally:
+            _liberar(chat_id)
+    elif tipo == "cr":
+        if not _ocupar(chat_id):
+            telegram_api.enviar(chat_id, "⏳ Ainda processando a mensagem anterior. Toque de novo em instantes.")
+            return
+        try:
+            atual = vinculo(chat_id) or v
+            pendente = next((p for p in atual["pendentes"] if p.get("id") == pid), None)
+            if pendente:   # toque duplo não cria duas vezes
+                linha, _, depois = _criar_obra(app, atual, pendente["dados"], pendente["grupos"])
+                _salvar(chat_id, pendentes=[p for p in atual["pendentes"] if p.get("id") != pid],
+                        historico=(atual["historico"] + [{"papel": "assistente", "texto": linha}])[-MAX_HISTORICO:])
+                telegram_api.enviar(chat_id, linha)
+                _fazer_na_obra_nova(app, chat_id, atual, depois)
         finally:
             _liberar(chat_id)
     elif tipo == "ob":

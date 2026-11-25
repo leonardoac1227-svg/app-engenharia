@@ -29,7 +29,7 @@ from .. import config
 from ..db import liberar_leitura, todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
-from . import boleto, ia_provedores, padroes, reembolso as quem_recebe
+from . import boleto, ia_provedores, padroes, pronuncia, reembolso as quem_recebe
 from .parcelamento import dia_de_pagar, dividir_valor
 
 log = logging.getLogger(__name__)
@@ -38,7 +38,7 @@ MAX_HISTORICO = 8
 MAX_OBRAS_DETALHADAS = 3
 _FALA_DE_DATA = re.compile(r"\b(hoje|ontem|anteontem|segunda|terca|quarta|quinta|sexta|sabado|domingo"
                            r"|semana passada|mes passado|dia \d{1,2}|\d{1,2}[/.-]\d{1,2})\b")
-_NOTA_DO_BOT = re.compile(r"\n\((Complete o lançamento|Estes arquivos reenviados).*?\)(?=\n|$)", re.S)
+_NOTA_DO_BOT = re.compile(r"\n\((Complete o lançamento|Estes arquivos reenviados|Obra nova em cadastro).*?\)(?=\n|$)", re.S)
 # Ordem importa só para leitura: com mais de um status na fala, nenhum é aplicado.
 _FALA_DE_STATUS = (
     ("Reembolso", r"\breembols\w*|\bdo (meu )?bolso\b|\beu (que )?paguei\b|\badiantei\b"),
@@ -282,6 +282,18 @@ EQUIPE
 - Exemplo: "o efetivo todo compareceu hoje, o Carlos foi demitido" → editar_funcionario {nome "Carlos",
   alteracoes {ativo false}} + ponto {equipe_inteira true}.
 
+OBRA NOVA (só para gestor)
+- "Quero criar uma obra", "adiciona uma obra", "entrou uma obra nova", "pegamos outra obra", "cadastra a obra O20":
+  criar_obra com o que foi dito (nome, data_inicio, previsao_fim, cliente, endereco). Nada dito além disso: criar_obra
+  com dados vazio. O app pergunta o que falta: não pergunte em "resposta". Nunca use o nome de outra obra do contexto.
+- "Dura 8 meses" conta a partir do início; só o mês ("até junho") = último dia do mês; sem ano, a próxima vez que a
+  data acontece. Orçamento e valores não entram no cadastro.
+- Obra nova em cadastro, avisada na mensagem: se o usuário responde (mesmo curto: "O20", "começa segunda", "o cliente é o
+  João"), criar_obra só com os campos desta mensagem. "Não sei", "depois eu vejo", "só isso", "pode criar" = pode_criar
+  true. "Deixa pra lá", "cancela" = cancelar true. Se a mensagem é outro assunto (nota, ponto...), trate o assunto.
+- O que a mensagem manda fazer NA obra nova ("e cadastra o Pedro nela") vai em ações com obra_id 0.
+- Mudar dado de obra que já existe continua sendo editar_obra.
+
 FOTOS
 - Imagens da obra (não documentos) viram "foto" no dia indicado ("relatório fotográfico de ontem").
 
@@ -456,6 +468,7 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
     if not audios:
         return ""
     nomes = [o["nome"] for o in obras] + [n for equipe in _equipes(obras).values() for n in equipe]
+    dica = pronuncia.dica_de_audio([o["nome"] for o in obras])
     liberar_leitura()
     inicio = time.monotonic()
     if config.XAI_API_KEY:
@@ -469,7 +482,7 @@ def transcrever(arquivos: list[dict], obras: list[dict], prazo: float) -> str:
         except ia_provedores.FalhaProvedor as erro:
             log.warning("Grok falhou (%s); tentando o Gemini", erro)
     bruto, _ = ia_provedores.gerar(
-        PROMPT_TRANSCRICAO.replace("{nomes}", ", ".join(dict.fromkeys(nomes))),
+        PROMPT_TRANSCRICAO.replace("{nomes}", ", ".join(dict.fromkeys(nomes)) + (f". {dica}" if dica else "")),
         "Transcreva os áudios.", audios, None, max_tokens=4096, pensar="minimo",
         prazo=max(prazo - (time.monotonic() - inicio), 15))
     transcricao = texto(bruto, 6000)
@@ -806,6 +819,19 @@ def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
             dados["reembolsar_para"] = quem
 
 
+# "Quero criar uma obra", "entrou obra nova": o pedido vale ainda que o modelo só responda em texto.
+_PEDIU_OBRA_NOVA = re.compile(
+    r"\b(cri(ar|a|e)|adicion(ar|a|e)|cadastr(ar|a|e)|abr(ir|e|a)|inclu(ir|i|a)|registr(ar|a|e))\s+"
+    r"((um|uma|mais|outra|a|nova)\s+){0,3}obra\b"
+    r"|\b(entrou|pegu?ei|pegamos|fech(ei|amos)|cheg(ou|amos)|apareceu|tem|temos|surgiu)\s+(mais\s+)?((um|uma|outra)\s+)?"
+    r"(obra\s+nova|nova\s+obra)\b")
+
+
+def _obra_nova_pedida(acoes: list[dict], mensagem: str, pode_gestor: bool) -> None:
+    if not acoes and pode_gestor and _PEDIU_OBRA_NOVA.search(catalogo.sem_acento(fala_do_usuario(mensagem))):
+        acoes.append({"tipo": "criar_obra", "dados": {}})
+
+
 def _obra_do_lancamento(acao: dict, ids: set[int]) -> int:
     """Correção vale na obra do lançamento citado, seja qual for a obra da conversa."""
     if acao.get("tipo") == "transferir_funcionario":
@@ -868,7 +894,7 @@ def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico
 def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquivos: list[dict],
                 historico: list[dict], pode_financeiro: bool, pode_gestor: bool,
                 obra_padrao: int = 0, prazo: float = ia_provedores.PRAZO_PADRAO,
-                reembolso: str = config.REEMBOLSO_PADRAO) -> dict:
+                reembolso: str = config.REEMBOLSO_PADRAO, separar_obra_nova: bool = False) -> dict:
     """Transcreve os áudios, identifica a obra e devolve as ações já conferidas.
 
     `obras`: as obras que o usuário pode usar (na tela, só a obra aberta).
@@ -877,6 +903,11 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     ids = {o["id"] for o in obras}
     inicio = time.monotonic()
     transcricao = transcrever(arquivos, obras, prazo / 2)
+    # Criando obra, o nome dito é o da obra nova: não vira o de uma que já existe.
+    if not _PEDIU_OBRA_NOVA.search(catalogo.sem_acento(f"{mensagem} {transcricao}")) \
+            and "(Obra nova em cadastro" not in mensagem:
+        nomes = [o["nome"] for o in obras]
+        mensagem, transcricao = pronuncia.corrigir(mensagem, nomes), pronuncia.corrigir(transcricao, nomes)
     mensagem = "\n".join(p for p in (mensagem, transcricao) if p)
     foco = _obras_citadas(mensagem, obras) or ([obra_padrao] if obra_padrao in ids else [])
     contexto = montar_contexto(obras, referencia, pode_financeiro, pode_gestor, foco)
@@ -900,6 +931,17 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     _programar_faturadas(acoes_brutas, mensagem, referencia)
     _programar_boletos(acoes_brutas, mensagem, referencia, arquivos)
     _ponto_nos_dias_ditos(acoes_brutas, mensagem, referencia)
+    _obra_nova_pedida(acoes_brutas, mensagem, pode_gestor)
+
+    # Obra nova não pertence a nenhuma obra; o que a mensagem manda fazer nela espera o cadastro.
+    novas = [a for a in acoes_brutas if a.get("tipo") == "criar_obra"]
+    acoes_brutas = [a for a in acoes_brutas if a.get("tipo") != "criar_obra"]
+    da_obra_nova = []
+    if novas and separar_obra_nova:
+        citadas = set(_obras_citadas(mensagem, obras))
+        da_obra_nova = [a for a in acoes_brutas if not _obra_do_lancamento(a, ids)
+                        and catalogo.inteiro(a.get("obra_id")) not in ids and not citadas]
+        acoes_brutas = [a for a in acoes_brutas if a not in da_obra_nova]
 
     obra_id = catalogo.inteiro(bruto.get("obra_id"))
     if obra_id not in ids:
@@ -914,7 +956,15 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     resultado = {"transcricao": transcricao, "obra_id": obra_id,
                  "resposta": texto(bruto.get("resposta"), 2000), "acoes": [], "avisos": [],
                  "fonte": fonte, "modelo": ia_provedores.modelo_usado(), "data_referencia": referencia,
-                 "precisa_obra": False, "acoes_sem_obra": []}
+                 "precisa_obra": False, "acoes_sem_obra": [], "acoes_da_obra_nova": da_obra_nova}
+    if novas:
+        ctx = catalogo.Contexto(0, referencia, pode_financeiro, pode_gestor, arquivos, reembolso=reembolso)
+        # Uma por vez: o cadastro é uma conversa só.
+        resultado["acoes"], resultado["avisos"] = catalogo.normalizar(novas[:1] if separar_obra_nova else novas, ctx)
+        for a in resultado["acoes"]:
+            a["obra_id"] = obra_id
+        if separar_obra_nova and len(novas) > 1:
+            resultado["avisos"].append("Cadastro uma obra de cada vez: depois desta, me diga a próxima.")
     for alvo, lista in por_obra.items():
         if not alvo:
             resultado["precisa_obra"] = True

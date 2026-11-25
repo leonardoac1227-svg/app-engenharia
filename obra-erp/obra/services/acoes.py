@@ -26,6 +26,7 @@ from typing import Callable
 from .. import config
 from ..db import todos, um
 from ..utils import data_br, data_iso, moeda, numero, texto
+from . import pronuncia
 from .padroes import completar, fornecedor_padrao
 from .parcelamento import dia_de_pagar
 
@@ -935,6 +936,59 @@ _registrar(TipoAcao(
     permissao="gestor", quando="orçamento total, previsão de término, obra parada ou concluída"))
 
 
+# Dados de uma obra nova, na ordem em que o bot pergunta. Valores não entram aqui.
+CAMPOS_OBRA_NOVA = (("nome", "nome da obra"), ("data_inicio", "data de início"),
+                    ("previsao_fim", "previsão de término"), ("cliente", "cliente"), ("endereco", "endereço"))
+OBRIGATORIOS_OBRA_NOVA = ("nome", "data_inicio", "previsao_fim")
+
+
+def obra_com_nome(nome: str) -> str:
+    """Nome da obra ativa que já se chama assim ("i-19" = "I19"), ou vazio."""
+    chave = re.sub(r"[^a-z0-9]", "", sem_acento(nome))
+    return next((r["nome"] for r in todos("SELECT nome FROM obras WHERE arquivada = 0")
+                 if chave and re.sub(r"[^a-z0-9]", "", sem_acento(r["nome"])) == chave), "")
+
+
+def _n_criar_obra(d, ctx):
+    saida = {"nome": pronuncia.nome_certo(texto(d.get("nome"), 140)), "cliente": texto(d.get("cliente"), 140),
+             "endereco": texto(d.get("endereco"), 220),
+             "data_inicio": data_ou(d.get("data_inicio"), ""), "previsao_fim": data_ou(d.get("previsao_fim"), "")}
+    for chave in ("pode_criar", "cancelar"):
+        if d.get(chave) is True:
+            saida[chave] = True
+    existente = obra_com_nome(saida["nome"])
+    if existente and not saida.get("cancelar"):
+        raise Pular(f"A obra {existente} já existe. Para criar outra, diga um nome diferente.")
+    if saida["data_inicio"] and saida["previsao_fim"] and saida["previsao_fim"] < saida["data_inicio"]:
+        saida["previsao_fim"] = ""   # fim antes do início: pergunta de novo
+    if not saida["nome"]:
+        saida["faltando"] = ["nome"]
+    return saida
+
+
+def _e_criar_obra(ex, d, arq):
+    if not d.get("nome"):
+        raise ex.Erro("Falta o nome da obra.", "faltando")
+    if obra_com_nome(d["nome"]):
+        raise ex.Erro(f"A obra {obra_com_nome(d['nome'])} já existe.")
+    campos = {c: d[c] for c, _ in CAMPOS_OBRA_NOVA if d.get(c)}
+    return {"obra_nova": ex.req("POST", "/api/obras", json=campos)["id"]}
+
+
+def _d_criar_obra(d):
+    partes = [f"{rotulo}: {data_br(d[c]) if c in ('data_inicio', 'previsao_fim') else d[c]}"
+              for c, rotulo in CAMPOS_OBRA_NOVA[1:] if d.get(c)]
+    return f"Obra nova: {d.get('nome') or '(sem nome)'}" + "".join(f" · {p}" for p in partes)
+
+
+_registrar(TipoAcao(
+    "criar_obra", "Obra nova",
+    "nome, data_inicio, previsao_fim, cliente, endereco, pode_criar (true: o usuário mandou criar com o que tem), "
+    "cancelar (true: desistiu). Nunca valores",
+    _n_criar_obra, _e_criar_obra, _d_criar_obra,
+    permissao="gestor", quando="\"quero criar uma obra\", \"adiciona uma obra\", \"entrou uma obra nova\", \"cadastrar obra\""))
+
+
 # ---------------------------------------------------------------- esquema dos dados
 #
 # Os campos de "dados" precisam estar DECLARADOS no esquema enviado ao Gemini.
@@ -955,11 +1009,12 @@ ESQUEMA_DADOS = {
                            "documento", "chave_pix", "vinculo", "classe", "legenda", "ambiente", "categoria", "descricao",
                            "fornecedor", "status_pagamento", "numero_nota", "vencimento", "reembolsar_para",
                            "linha_digitavel", "condicao_pagamento", "data_documento", "parcela_frequencia", "frete_transportador", "locacao_frequencia", "equipamento",
-                           "pago_em", "meta", "formato", "mover_para_data")},
+                           "pago_em", "meta", "formato", "mover_para_data",
+                           "cliente", "endereco", "data_inicio", "previsao_fim")},
         **{k: _I for k in ("funcionario_id", "parcelas", "frete_viagens", "locacao_ciclos", "despesa_id",
                            "parcela_id", "locacao_id", "ciclos", "mover_para_obra", "cobranca_id")},
         "valor": _N, "orcamento_previsto": _N, "horas": _N, "diaria": _N, "justificativa": _S,
-        "repete_mensal": _B, "faturada": _B,
+        "repete_mensal": _B, "faturada": _B, "pode_criar": _B, "cancelar": _B,
         "ativo": _B, "incluir_reembolsos": _B, "meta_atingida": _B, "equipe_inteira": _B,
         "anexos": {"type": "array", "items": _I},
         "frete_datas": {"type": "array", "items": _S},
