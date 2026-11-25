@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     papel TEXT NOT NULL DEFAULT 'gestor',
     ativo INTEGER NOT NULL DEFAULT 1,
     senha_provisoria INTEGER NOT NULL DEFAULT 0,
+    reembolso TEXT DEFAULT '',
     ultimo_acesso TEXT,
     criado_em TEXT NOT NULL
 );

@@ -29,7 +29,7 @@ from .. import config
 from ..db import liberar_leitura, todos, um
 from ..utils import ApiErro, hoje_iso, somar_dias, texto
 from . import acoes as catalogo
-from . import boleto, ia_provedores, padroes
+from . import boleto, ia_provedores, padroes, reembolso as quem_recebe
 from .parcelamento import dia_de_pagar, dividir_valor
 
 log = logging.getLogger(__name__)
@@ -135,7 +135,9 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
      locadoras, Diego motoboy, SOS Entulho, Hitalo) = Em Aberto; compra de balcão paga na hora (cupom,
      dinheiro, PIX, cartão) em loja pequena, posto, papelaria = Reembolso.
   3. "Pago" só quando o usuário disser. Nunca deduza "Pago" pelo cupom.
-- Reembolso: "reembolsar_para" é quem pagou. Sem nome dito, deixe vazio (o app usa o padrão, Léo).
+- Reembolso: "reembolsar_para" é quem pagou. Sem nome dito, deixe vazio (o app usa quem mandou a mensagem)
+  e nunca complete por conta própria. "Reembolso Léo", "reembolso Caio", "reembolso projeto" = reembolsar_para com
+  o nome dito.
   "Reembolso do Luiz", "o Luiz pagou" = reembolsar_para "Luiz".
 - Data do lançamento: a que o usuário disser; sem data dita, data_referencia (hoje), mesmo que o documento
   seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
@@ -747,7 +749,7 @@ def _ponto_nos_dias_ditos(acoes: list[dict], mensagem: str, referencia: str) -> 
         acoes.insert(posicao + i, {**modelo, "dados": {**modelo["dados"], "data": dia}})
 
 
-def status_dito(mensagem: str) -> tuple[str, str]:
+def status_dito(mensagem: str, nomes: list[str] | None = None) -> tuple[str, str]:
     """Status que o usuário falou, onde quer que esteja na mensagem, e para quem é o reembolso.
 
     Só vale se a fala trouxer um status só: "uma em aberto e outra reembolso" fica com a IA.
@@ -761,7 +763,9 @@ def status_dito(mensagem: str) -> tuple[str, str]:
         nome = _REEMBOLSO_PARA.search(fala_do_usuario(mensagem))
         if nome and catalogo.sem_acento(nome.group(1)) not in _NAO_SAO_NOMES:
             quem = nome.group(1).capitalize()
-    return achados[0], quem
+        elif not nome:
+            quem = quem_recebe.dito_junto(fala_do_usuario(mensagem), nomes or [])
+    return achados[0], quem_recebe.nome_oficial(quem, nomes or []) if quem else ""
 
 
 def _parcelamento_so_se_dito(acoes: list[dict], mensagem: str) -> None:
@@ -783,7 +787,16 @@ def _parcelamento_so_se_dito(acoes: list[dict], mensagem: str) -> None:
 
 
 def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
-    status, quem = status_dito(mensagem)
+    nomes = quem_recebe.conhecidos()
+    fala = set(re.findall(r"[a-z]+", catalogo.sem_acento(fala_do_usuario(mensagem))))
+    for dados in _despesas(acoes):
+        # Nome que ninguém disse: a IA às vezes repete o reembolso do lançamento anterior.
+        dito = re.findall(r"[a-z]+", catalogo.sem_acento(str(dados.get("reembolsar_para") or "")))
+        if dito and not set(dito) & fala:
+            dados.pop("reembolsar_para", None)
+        elif dito:
+            dados["reembolsar_para"] = quem_recebe.nome_oficial(str(dados["reembolsar_para"]).strip(), nomes)
+    status, quem = status_dito(mensagem, nomes)
     if not status:
         return
     for dados in _despesas(acoes):
@@ -853,7 +866,8 @@ def _texto_pedido(mensagem: str, contexto: dict, arquivos: list[dict], historico
 
 def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquivos: list[dict],
                 historico: list[dict], pode_financeiro: bool, pode_gestor: bool,
-                obra_padrao: int = 0, prazo: float = ia_provedores.PRAZO_PADRAO) -> dict:
+                obra_padrao: int = 0, prazo: float = ia_provedores.PRAZO_PADRAO,
+                reembolso: str = config.REEMBOLSO_PADRAO) -> dict:
     """Transcreve os áudios, identifica a obra e devolve as ações já conferidas.
 
     `obras`: as obras que o usuário pode usar (na tela, só a obra aberta).
@@ -865,6 +879,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
     mensagem = "\n".join(p for p in (mensagem, transcricao) if p)
     foco = _obras_citadas(mensagem, obras) or ([obra_padrao] if obra_padrao in ids else [])
     contexto = montar_contexto(obras, referencia, pode_financeiro, pode_gestor, foco)
+    contexto["reembolso_padrao"] = reembolso
     sistema = PROMPT_BASE.replace("{catalogo}", catalogo.texto_para_prompt(pode_financeiro, pode_gestor)) \
                          .replace("{padroes}", padroes.texto_para_prompt() if pode_financeiro else "(não se aplica)") \
                          .replace("{exemplos}", padroes.exemplos_para_prompt(pode_financeiro)) \
@@ -904,7 +919,7 @@ def interpretar(obras: list[dict], mensagem: str, referencia: str | None, arquiv
             resultado["precisa_obra"] = True
             resultado["acoes_sem_obra"] = lista
             continue
-        ctx = catalogo.Contexto(alvo, referencia, pode_financeiro, pode_gestor, arquivos)
+        ctx = catalogo.Contexto(alvo, referencia, pode_financeiro, pode_gestor, arquivos, reembolso=reembolso)
         conferidas, avisos = catalogo.normalizar(lista, ctx)
         for a in conferidas:
             a["obra_id"] = alvo
@@ -947,10 +962,11 @@ def _garantir_anexos(acoes: list[dict], arquivos: list[dict]) -> None:
 
 
 def reconferir(obra_id: int, acoes: list[dict], arquivos: list[dict], pode_financeiro: bool,
-               pode_gestor: bool, referencia: str | None = None) -> tuple[list[dict], list[str]]:
+               pode_gestor: bool, referencia: str | None = None,
+               reembolso: str = config.REEMBOLSO_PADRAO) -> tuple[list[dict], list[str]]:
     """Confere de novo ações que voltaram da tela (o navegador não é confiável)."""
     ctx = catalogo.Contexto(obra_id, catalogo.data_ou(referencia, hoje_iso()), pode_financeiro,
-                            pode_gestor, arquivos)
+                            pode_gestor, arquivos, reembolso=reembolso)
     brutas = [{"tipo": a.get("tipo"), "dados": a.get("dados") or {}} for a in acoes if isinstance(a, dict)]
     conferidas, avisos = catalogo.normalizar(brutas, ctx)
     # Leva junto o "lançar mesmo assim" de cada uma, na mesma ordem.

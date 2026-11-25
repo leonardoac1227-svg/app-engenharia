@@ -291,6 +291,7 @@ CREATE TABLE IF NOT EXISTS usuarios (
     papel TEXT NOT NULL DEFAULT 'gestor',
     ativo INTEGER NOT NULL DEFAULT 1,
     senha_provisoria INTEGER NOT NULL DEFAULT 0,
+    reembolso TEXT DEFAULT '',
     ultimo_acesso TEXT,
     criado_em TEXT NOT NULL
 );
@@ -656,6 +657,7 @@ CREATE TABLE IF NOT EXISTS semanas_automaticas (
 # Colunas acrescentadas depois da v1 do app. Bancos criados pelo SCHEMA acima
 # já nascem com elas; bancos antigos recebem via ALTER TABLE.
 COLUNAS_EXTRAS = [
+    ("usuarios", "reembolso", "TEXT DEFAULT ''"),
     ("obras", "cliente", "TEXT DEFAULT ''"),
     ("obras", "endereco", "TEXT DEFAULT ''"),
     ("obras", "orcamento_total", "REAL NOT NULL DEFAULT 0"),

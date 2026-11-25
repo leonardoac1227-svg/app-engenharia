@@ -106,7 +106,8 @@ def inicio():
     primeira disponível em vez de devolver erro.
     """
     from .. import __version__
-    from ..config import JORNADA_HORAS, REEMBOLSO_PADRAO
+    from ..config import JORNADA_HORAS
+    from ..services import reembolso
     from ..security import token_csrf
     from .auth import _usuario_publico
 
@@ -124,7 +125,7 @@ def inicio():
         "usuario": _usuario_publico(usuario),
         "csrf": token_csrf(),
         "versao": __version__,
-        "reembolso_padrao": REEMBOLSO_PADRAO,
+        "reembolso_padrao": reembolso.padrao_de(usuario["id"]),
         "jornada_horas": JORNADA_HORAS,
         "obras": obras,
         "contexto": None,

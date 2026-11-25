@@ -11,12 +11,12 @@ from datetime import date
 
 from flask import Blueprint, jsonify, request
 
-from ..config import CATEGORIAS_PADRAO, REEMBOLSO_PADRAO, STATUS_PAGAMENTO
+from ..config import CATEGORIAS_PADRAO, STATUS_PAGAMENTO
 from ..db import executar, registrar_auditoria, todos, um
-from ..security import (exigir_financeiro, garantir_acesso_obra, login_obrigatorio,
+from ..security import (usuario_atual, exigir_financeiro, garantir_acesso_obra, login_obrigatorio,
                         obra_da_despesa, obra_do_dia)
 from ..services import anexos_despesa
-from ..services import cobrancas
+from ..services import cobrancas, reembolso
 from ..services.locacoes import criar_locacao
 from ..services.fretes import gerar_fretes, listar_grupo as listar_fretes
 from ..services.fretes import validar as validar_frete
@@ -106,7 +106,7 @@ def _quem_recebe_reembolso(status: str, nome) -> str:
     """Nome de quem adiantou o dinheiro. Só existe em lançamento de reembolso."""
     if status != "Reembolso":
         return ""
-    return texto(nome, 80) or REEMBOLSO_PADRAO
+    return texto(nome, 80) or reembolso.padrao_de((usuario_atual() or {}).get("id"))
 
 
 @bp.get("/dias/<int:dia_id>/despesas")

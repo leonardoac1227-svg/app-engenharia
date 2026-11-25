@@ -21,6 +21,7 @@ from .. import config
 from ..db import registrar_auditoria, um
 from ..security import (PODE_FINANCEIRO, exigir_lancamento, garantir_acesso_obra, login_obrigatorio,
                         obra_do_dia)
+from ..services import reembolso as quem_recebe
 from ..services import assistente, ia_provedores
 from ..services.executor_acoes import ErroAcao, Executor, ordenar
 from ..utils import ApiErro, _conteudo_confere, data_iso, extensao, segunda_da_semana, texto
@@ -117,7 +118,7 @@ def interpretar(obra_id: int):
         resultado = assistente.interpretar(
             [obra], mensagem, request.form.get("data_referencia"), arquivos, _historico(),
             pode_financeiro=usuario["papel"] in PODE_FINANCEIRO, pode_gestor=usuario["papel"] == "gestor",
-            obra_padrao=obra_id, prazo=100)
+            obra_padrao=obra_id, prazo=100, reembolso=quem_recebe.padrao_de(usuario["id"]))
     except ia_provedores.IaIndisponivel as erro:
         raise ApiErro(str(erro), 503, "ia_indisponivel")
 
@@ -151,7 +152,7 @@ def aplicar(obra_id: int):
         pedida = fila[indice]
         conferidas, avisos = assistente.reconferir(
             obra_id, [pedida], arquivos, pode_financeiro, usuario["papel"] == "gestor",
-            request.form.get("data_referencia"))
+            request.form.get("data_referencia"), quem_recebe.padrao_de(usuario["id"]))
         if not conferidas:
             resultados.append({"indice": indice, "ok": False,
                                "erro": avisos[0] if avisos else "Nada a gravar nesta ação."})

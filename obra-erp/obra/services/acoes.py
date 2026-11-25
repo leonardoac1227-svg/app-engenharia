@@ -49,6 +49,7 @@ class Contexto:
     arquivos: list = field(default_factory=list)
     _funcionarios: list | None = None
     desligados: set = field(default_factory=set)   # saem da equipe nesta mesma mensagem
+    reembolso: str = config.REEMBOLSO_PADRAO        # quem recebe quando ninguém é dito
 
     @property
     def funcionarios(self) -> list[dict]:
@@ -531,7 +532,7 @@ def _n_despesa(d, ctx):
         "status_pagamento": status,
         "numero_nota": texto(d.get("numero_nota"), 40),
         "vencimento": data_ou(d.get("vencimento"), ""),
-        "reembolsar_para": (texto(d.get("reembolsar_para"), 80) or config.REEMBOLSO_PADRAO)
+        "reembolsar_para": (texto(d.get("reembolsar_para"), 80) or ctx.reembolso)
         if status == "Reembolso" else "",
         "parcelas": parcelas if 2 <= parcelas <= 36 else 0,
         "parcela_frequencia": frequencia if frequencia in FREQ_PARCELA else "mensal",
@@ -686,7 +687,7 @@ def _n_editar_despesa(d, ctx):
     if novo_status and novo_status != atual["status_pagamento"]:
         alteracoes["status_pagamento"] = novo_status
         if novo_status == "Reembolso" and "reembolsar_para" not in alteracoes:
-            alteracoes["reembolsar_para"] = atual.get("reembolsar_para") or config.REEMBOLSO_PADRAO
+            alteracoes["reembolsar_para"] = atual.get("reembolsar_para") or ctx.reembolso
     if data_ou(origem.get("vencimento"), ""):
         alteracoes["vencimento"] = data_ou(origem.get("vencimento"), "")
     mover = data_ou(origem.get("mover_para_data") or d.get("mover_para_data")

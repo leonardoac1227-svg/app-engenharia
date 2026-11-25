@@ -119,6 +119,8 @@ def listar_usuarios():
     for r in rows:
         item = dict(r)
         item["papel_label"] = PAPEIS.get(r["papel"], r["papel"])
+        item["convite"] = str(r["email"]).endswith(DOMINIO_CONVITE)
+        item["no_telegram"] = bool(um("SELECT 1 AS x FROM telegram_chats WHERE usuario_id = ?", (r["id"],)))
         item["obras"] = [x["obra_id"] for x in todos(
             "SELECT obra_id FROM usuario_obras WHERE usuario_id = ?", (r["id"],))]
         lista.append(item)
@@ -156,6 +158,60 @@ def criar_usuario():
 
     registrar_auditoria(usuario_atual(), "criou_usuario", "usuario", usuario_id, f"{nome} ({papel})")
     return jsonify({"id": usuario_id}), 201
+
+
+# Conta que entra só pelo Telegram: sem e-mail de verdade e com uma senha que ninguém conhece.
+DOMINIO_CONVITE = "@convite.telegram"
+
+
+def _convite(usuario_id: int, nome: str) -> dict:
+    from ..services import bot_telegram, telegram_api
+    codigo = bot_telegram.gerar_codigo(usuario_id, convite=True)
+    try:
+        bot = telegram_api.usuario_do_bot()
+    except telegram_api.ErroTelegram as erro:
+        raise ApiErro(f"Telegram recusou o token: {erro}", 400)
+    link = f"https://t.me/{bot}?start={codigo}" if bot else ""
+    return {"id": usuario_id, "codigo": codigo, "link": link, "dias": bot_telegram.VALIDADE_CONVITE.days,
+            "mensagem": f"Oi, {nome}! Para usar o bot da obra, abra este link e toque em Iniciar:\n{link}\n\n"
+                        f"Se não abrir, mande ao bot: /start {codigo}\n\n"
+                        f"Vale por {bot_telegram.VALIDADE_CONVITE.days} dias e só uma vez."}
+
+
+@bp.post("/usuarios/convite")
+@papel_obrigatorio("gestor")
+def convidar_pelo_telegram():
+    """Cria a conta e devolve o link pronto para mandar: a pessoa só toca em Iniciar."""
+    from ..services import telegram_api
+    if not telegram_api.configurado():
+        raise ApiErro("Bot desligado: configure TELEGRAM_BOT_TOKEN no servidor.", 400)
+    dados = request.get_json(silent=True) or {}
+    nome = texto(dados.get("nome"), 120, True, "o nome")
+    papel = texto(dados.get("papel"), 20) or "mestre"
+    if papel not in PAPEIS or papel == "cliente":
+        raise ApiErro("O convite do bot é para gestor ou mestre de obra.")
+    usuario_id = executar(
+        """INSERT INTO usuarios (nome, email, senha_hash, papel, ativo, senha_provisoria, reembolso, criado_em)
+           VALUES (?, ?, ?, ?, 1, 0, ?, ?)""",
+        (nome, secrets.token_hex(8) + DOMINIO_CONVITE, generate_password_hash(secrets.token_urlsafe(32)), papel,
+         nome.split(" ")[0], agora_iso())).lastrowid
+    for obra_id in dados.get("obras", []) or []:
+        executar("INSERT OR IGNORE INTO usuario_obras (usuario_id, obra_id) VALUES (?, ?)", (usuario_id, int(obra_id)))
+    registrar_auditoria(usuario_atual(), "convidou_usuario", "usuario", usuario_id, f"{nome} ({papel})")
+    return jsonify(_convite(usuario_id, nome)), 201
+
+
+@bp.post("/usuarios/<int:usuario_id>/convite")
+@papel_obrigatorio("gestor")
+def renovar_convite(usuario_id: int):
+    """Link novo para quem entrou por convite. Conta com senha gera o próprio código no app."""
+    alvo = um("SELECT nome, email, ativo FROM usuarios WHERE id = ?", (usuario_id,))
+    if not alvo or not alvo["email"].endswith(DOMINIO_CONVITE):
+        raise ApiErro("Só contas criadas por convite recebem link por aqui.", 400)
+    if not alvo["ativo"]:
+        raise ApiErro("Esta conta está desativada.", 400)
+    registrar_auditoria(usuario_atual(), "renovou_convite", "usuario", usuario_id, alvo["nome"])
+    return jsonify(_convite(usuario_id, alvo["nome"]))
 
 
 @bp.put("/usuarios/<int:usuario_id>")

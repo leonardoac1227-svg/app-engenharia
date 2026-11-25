@@ -87,15 +87,17 @@ export async function renderizar(raiz) {
       <div class="section-head"><h3>Usuários e acessos</h3>
         <button class="btn btn-outline btn-small" data-acao="novo-usuario">+ Usuário</button>
       </div>
+      <button class="btn btn-brass" data-acao="convidar" style="margin-bottom:10px">✈ Convidar para o bot (só o link)</button>
       <div class="lista">
         ${usuarios.map((u) => `
           <div class="item" style="${u.ativo ? '' : 'opacity:.55'}">
             <div class="item-corpo">
               <div class="item-titulo">${esc(u.nome)}${u.ativo ? '' : '<span class="badge badge-neutro">inativo</span>'}</div>
-              <div class="item-sub">${esc(u.email)} · ${esc(u.papel_label)}${u.papel !== 'gestor' ? ` · ${u.obras.length} obra(s)` : ''}</div>
+              <div class="item-sub">${u.convite ? `só pelo Telegram · ${u.no_telegram ? 'conectado' : 'ainda não entrou'}` : esc(u.email)} · ${esc(u.papel_label)}${u.papel !== 'gestor' ? ` · ${u.obras.length} obra(s)` : ''}</div>
               <div class="item-sub">${u.ultimo_acesso ? 'último acesso ' + dataHoraBR(u.ultimo_acesso) : 'nunca acessou'}</div>
             </div>
             <div class="item-acoes">
+              ${u.convite && u.ativo ? `<button class="icon-mini" data-convite="${u.id}" title="Novo link do bot">✈</button>` : ''}
               <button class="icon-mini" data-editar-usuario="${u.id}">✎</button>
               ${u.id === estado.usuario.id ? '' : `<button class="icon-mini" data-remover-usuario="${u.id}">🗑</button>`}
             </div>
@@ -302,6 +304,10 @@ function ligarEventos(raiz, { obra, usuarios }) {
   });
 
   acao('novo-usuario', () => abrirModalUsuario(null, raiz));
+  acao('convidar', () => abrirModalConvite(raiz));
+  raiz.querySelectorAll('[data-convite]').forEach((btn) => {
+    btn.onclick = async () => mostrarConvite(await api.post(`/api/usuarios/${btn.dataset.convite}/convite`, {}), raiz);
+  });
   raiz.querySelectorAll('[data-editar-usuario]').forEach((btn) => {
     btn.onclick = () => abrirModalUsuario(usuarios.find((u) => String(u.id) === btn.dataset.editarUsuario), raiz);
   });
@@ -434,6 +440,55 @@ function ligarEventos(raiz, { obra, usuarios }) {
 }
 
 /** Modal de usuário com seleção das obras que ele pode acessar. */
+/* Convite: só nome e perfil. A pessoa entra pelo link, sem e-mail nem senha. */
+function abrirModalConvite(raiz) {
+  abrirModal(`
+    <h3>Convidar para o bot</h3>
+    <p class="small muted">A pessoa usa só o Telegram. Você manda o link e ela toca em Iniciar.</p>
+    <label class="field-label">Nome</label>
+    <input type="text" id="cvNome" placeholder="Como o bot vai chamar">
+    <label class="field-label">Perfil de acesso</label>
+    <select id="cvPapel">
+      <option value="gestor">Gestor — lança notas, vê tudo de todas as obras</option>
+      <option value="mestre" selected>Mestre de obra — só ponto, diário e fotos</option>
+    </select>
+    <label class="field-label">Obras (só para mestre)</label>
+    <div class="stack" id="cvObras">
+      ${estado.obras.map((o) => `
+        <label class="checkbox-row" style="margin:0"><input type="checkbox" value="${o.id}"><span>${esc(o.nome)}</span></label>`).join('')}
+    </div>
+    <div class="btn-linha">
+      <button class="btn btn-outline" id="cvCancelar">Cancelar</button>
+      <button class="btn btn-brass" id="cvCriar">Gerar link</button>
+    </div>`, (modal) => {
+    modal.querySelector('#cvCancelar').onclick = fecharModal;
+    modal.querySelector('#cvCriar').onclick = async () => {
+      const nome = modal.querySelector('#cvNome').value.trim();
+      if (!nome) { toast('Informe o nome.', 'erro'); return; }
+      const obras = Array.from(modal.querySelectorAll('#cvObras input:checked')).map((c) => Number(c.value));
+      mostrarConvite(await api.post('/api/usuarios/convite', { nome, papel: modal.querySelector('#cvPapel').value, obras }), raiz);
+    };
+  });
+}
+
+function mostrarConvite(c, raiz) {
+  abrirModal(`
+    <h3>Mande esta mensagem</h3>
+    <textarea id="cvTexto" rows="8" readonly>${esc(c.mensagem)}</textarea>
+    <p class="small faint">Quem abrir o link entra com este acesso: mande só para a pessoa certa.</p>
+    <div class="btn-linha">
+      <button class="btn btn-outline" id="cvFechar">Fechar</button>
+      <button class="btn btn-brass" id="cvCopiar">Copiar</button>
+    </div>`, (modal) => {
+    const texto = modal.querySelector('#cvTexto');
+    modal.querySelector('#cvCopiar').onclick = async () => {
+      try { await navigator.clipboard.writeText(c.mensagem); } catch (_) { texto.select(); document.execCommand('copy'); }
+      toast('Mensagem copiada.', 'ok');
+    };
+    modal.querySelector('#cvFechar').onclick = async () => { fecharModal(); await renderizar(raiz); };
+  });
+}
+
 function abrirModalUsuario(usuario, raiz) {
   const edicao = !!usuario;
   abrirModal(`

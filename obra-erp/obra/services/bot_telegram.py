@@ -40,6 +40,7 @@ from ..db import executar, liberar_leitura, todos, um
 from ..utils import ApiErro, agora_iso, data_br, hoje_iso, moeda, numero, segunda_da_semana
 from . import acoes as catalogo
 from . import assistente, ia_provedores, telegram_api
+from . import reembolso
 from .executor_acoes import ErroAcao, Executor, ordenar
 
 log = logging.getLogger(__name__)
@@ -52,6 +53,7 @@ PRAZO_IA = 150              # segundos: no bot não há limite do gunicorn
 VALIDADE_FILA = timedelta(hours=1)        # arquivo esperando instrução
 VALIDADE_TENTATIVA = timedelta(hours=12)  # arquivo de tentativa que falhou (botão "tentar de novo")
 VALIDADE_CODIGO = timedelta(minutes=20)
+VALIDADE_CONVITE = timedelta(days=3)
 OCUPADO_POR = timedelta(minutes=5)   # teto de um processamento (IA + gravação)
 ESPERA_MAXIMA = 300                  # segundos esperando a mensagem anterior terminar
 MAX_HISTORICO = 8
@@ -80,12 +82,14 @@ Pode mandar só a foto: eu analiso sozinho. Se quiser explicar, mande o áudio o
 
 # ---------------------------------------------------------------- vínculo
 
-def gerar_codigo(usuario_id: int) -> str:
+def gerar_codigo(usuario_id: int, convite: bool = False) -> str:
+    """Código que liga a conversa à conta. O de convite vale dias e, por isso, é bem mais longo."""
     executar("DELETE FROM telegram_codigos WHERE usuario_id = ? OR expira_em < ?",
              (usuario_id, agora_iso()))
-    codigo = secrets.token_hex(4).upper()
+    codigo = secrets.token_hex(10 if convite else 4).upper()
     executar("INSERT INTO telegram_codigos (codigo, usuario_id, expira_em) VALUES (?, ?, ?)",
-             (codigo, usuario_id, (datetime.now() + VALIDADE_CODIGO).isoformat(timespec="seconds")))
+             (codigo, usuario_id, (datetime.now() + (VALIDADE_CONVITE if convite else VALIDADE_CODIGO))
+              .isoformat(timespec="seconds")))
     return codigo
 
 
@@ -116,7 +120,10 @@ def _vincular(chat_id: str, codigo: str) -> str:
     linha = um("SELECT usuario_id, expira_em FROM telegram_codigos WHERE codigo = ?",
                (codigo.strip().upper(),))
     if not linha or linha["expira_em"] < agora_iso():
-        return "Código inválido ou vencido. Gere outro no app em Ajustes → Bot do Telegram."
+        return "Código inválido ou vencido. Peça outro a quem te convidou (ou gere no app em Ajustes → Bot do Telegram)."
+    dono = um("SELECT ativo FROM usuarios WHERE id = ?", (linha["usuario_id"],))
+    if not dono or not dono["ativo"]:
+        return "Esta conta está desativada. Fale com o gestor."
     executar("DELETE FROM telegram_codigos WHERE codigo = ?", (codigo.strip().upper(),))
     executar("DELETE FROM telegram_chats WHERE chat_id = ?", (chat_id,))
     executar("""INSERT INTO telegram_chats (chat_id, usuario_id, obra_id, historico, pendentes,
@@ -521,7 +528,7 @@ def _processar_lote(app, chat_id: str, v: dict, texto_msg: str, lote: str, ja_av
     inicio = time.monotonic()
     resultado = assistente.interpretar(
         obras, mensagem, hoje_iso(), arquivos, v["historico"], pode_financeiro=pf, pode_gestor=pg,
-        obra_padrao=obra_conversa, prazo=PRAZO_IA)
+        obra_padrao=obra_conversa, prazo=PRAZO_IA, reembolso=reembolso.padrao_de(v["usuario_id"]))
     log.info("Telegram %s: IA em %.1fs (%s %s)", chat_id, time.monotonic() - inicio,
              resultado["fonte"], resultado["modelo"])
 
@@ -633,7 +640,8 @@ def _escolher_obra(app, chat_id: str, v: dict, pendente: dict, obra_id: int) -> 
     arquivos = [{**a, "dados": telegram_api.baixar(a["file_id"])} for a in pendente.get("arquivos", [])]
     pf, pg = _perfil(v)
     conferidas, avisos = catalogo.normalizar([a["bruta"] for a in pendente.get("acoes", [])],
-                                             catalogo.Contexto(obra_id, hoje_iso(), pf, pg, arquivos))
+                                             catalogo.Contexto(obra_id, hoje_iso(), pf, pg, arquivos,
+                                                               reembolso=reembolso.padrao_de(v["usuario_id"])))
     resultado = {"acoes": conferidas, "avisos": avisos, "transcricao": "",
                  "resposta": pendente.get("resposta") or "Ok."}
     _finalizar(app, chat_id, v, resultado, arquivos, obra_id, pendente.get("transcricao", ""))
