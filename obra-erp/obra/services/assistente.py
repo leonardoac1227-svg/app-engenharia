@@ -136,8 +136,8 @@ DOCUMENTOS (nota, cupom, orçamento, recibo, boleto, PIX)
      dinheiro, PIX, cartão) em loja pequena, posto, papelaria = Reembolso.
   3. "Pago" só quando o usuário disser. Nunca deduza "Pago" pelo cupom.
 - Reembolso: "reembolsar_para" é quem pagou. Sem nome dito, deixe vazio (o app usa quem mandou a mensagem)
-  e nunca complete por conta própria. "Reembolso Léo", "reembolso Caio", "reembolso projeto" = reembolsar_para com
-  o nome dito.
+  e nunca complete por conta própria. "Reembolso Léo", "reembolso Caio", "reembolso Progetto" = reembolsar_para com
+  o nome dito ("reembolso projeto" = "Progetto").
   "Reembolso do Luiz", "o Luiz pagou" = reembolsar_para "Luiz".
 - Data do lançamento: a que o usuário disser; sem data dita, data_referencia (hoje), mesmo que o documento
   seja de outro dia: o lançamento entra na semana em que foi enviado. A data do documento não vira "data".
@@ -789,6 +789,7 @@ def _parcelamento_so_se_dito(acoes: list[dict], mensagem: str) -> None:
 def _aplicar_status_dito(acoes: list[dict], mensagem: str) -> None:
     nomes = quem_recebe.conhecidos()
     fala = set(re.findall(r"[a-z]+", catalogo.sem_acento(fala_do_usuario(mensagem))))
+    fala |= {catalogo.sem_acento(quem_recebe.APELIDOS[p]) for p in fala & set(quem_recebe.APELIDOS)}
     for dados in _despesas(acoes):
         # Nome que ninguém disse: a IA às vezes repete o reembolso do lançamento anterior.
         dito = re.findall(r"[a-z]+", catalogo.sem_acento(str(dados.get("reembolsar_para") or "")))

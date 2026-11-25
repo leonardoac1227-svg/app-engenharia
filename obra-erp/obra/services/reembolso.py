@@ -15,8 +15,9 @@ from ..db import get_db, todos, um
 
 log = logging.getLogger("obra-erp")
 
-# Destino que não é pessoa, dito como "reembolso projeto".
-DESTINOS = ("Projeto",)
+# Destino que não é pessoa: a empresa. "Reembolso projeto" é como o áudio de "Progetto" costuma sair.
+DESTINOS = ("Progetto",)
+APELIDOS = {"projeto": "Progetto"}
 
 
 def padrao_de(usuario_id: int | None) -> str:
@@ -52,7 +53,8 @@ def _chave(texto: str) -> str:
 
 def nome_oficial(nome: str, nomes: list[str]) -> str:
     """"leo" → "Léo": a grafia de quem já existe."""
-    return next((n for n in nomes if _chave(n) == _chave(nome)), nome)
+    apelido = APELIDOS.get(_chave(nome))
+    return apelido or next((n for n in nomes if _chave(n) == _chave(nome)), nome)
 
 
 def dito_junto(fala: str, nomes: list[str]) -> str:
@@ -61,7 +63,7 @@ def dito_junto(fala: str, nomes: list[str]) -> str:
     if not achado:
         return ""
     nome, depois = achado.group(1), achado.group(2) or ""
-    oficial = next((n for n in nomes if _chave(n) == nome), "")
+    oficial = APELIDOS.get(nome) or next((n for n in nomes if _chave(n) == nome), "")
     if oficial in DESTINOS and depois and depois not in ("na", "no", "obra", "e"):
         return ""   # "reembolso, projeto elétrico": é o material, não para quem vai
     return oficial
