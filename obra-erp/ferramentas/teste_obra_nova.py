@@ -137,7 +137,7 @@ for f in ('obra do Remi', 'obra Saint', 'obra só net'):
 for f in ('paguei só net esse mês', 'o Remi faltou hoje', 'são 50 reais de prego', 'sem remessa', 'santo antônio', 'sem reembolso',
           'cem remendos', 'são remédios', 'santa mônica', 'sem rampa', 'a senha', 'são ramais de água', 'sem rima'):
     ok(pronuncia.corrigir(f, ['Saint Remy', 'I19']) == f, f'"{f}" não vira obra', pronuncia.corrigir(f, ['Saint Remy']))
-ok(pronuncia.corrigir('no soneto e no san remi', ['Saint Remy', 'Sonnet']) == 'no Sonnet e no Saint Remy', 'com as duas obras, cada uma na sua')
+ok(pronuncia.corrigir('no soneto e no san remi', ['Saint Remy']) == 'no Saint Remy e no Saint Remy', 'as duas escritas são a mesma obra')
 ok(pronuncia.corrigir('no soneto', ['I19']) == 'no soneto', 'sem a obra cadastrada, não mexe')
 ok('san remi' in pronuncia.dica_de_audio(['Saint Remy']) and not pronuncia.dica_de_audio(['I19']), 'a transcrição sabe como se fala')
 c.post('/api/obras', json={'nome': 'Saint Remy'}, headers=H)
@@ -145,10 +145,10 @@ r = diz('pregos no são rémi, 80 reais', {'tipo': 'despesa', 'dados': {'descric
 ok('Saint Remy' in r and 'no Saint Remy' in vistos[-1], 'o bot lança no Saint Remy e a IA já lê o nome certo', r)
 q = quantas(); r = diz('cria a obra san remi', nova(nome='san remi'))
 ok('já existe' in r and quantas() == q, 'não cria um segundo Saint Remy', r)
-r = diz('quero criar uma obra, o nome é soneto', nova(nome='soneto', pode_criar=True))
-ok(obra('Sonnet'), 'obra nova dita "soneto" nasce como Sonnet', r)
-r = diz('areia no sonete, 90', {'tipo': 'despesa', 'dados': {'descricao': 'Areia', 'valor': 90}})
-ok('Sonnet' in r, 'e recebe os lançamentos dela', r)
+r = diz('quero criar uma obra, o nome é Sonnet', nova(nome='Sonnet', pode_criar=True))
+ok('Saint Remy já existe' in r and quantas() == q, 'nem uma obra "Sonnet"', r)
+r = diz('areia no Sonnet, 90', {'tipo': 'despesa', 'dados': {'descricao': 'Areia', 'valor': 90}})
+ok('Saint Remy' in r, '"Sonnet" lança na Saint Remy', r)
 
 print('\n' + ('OBRA NOVA OK' if not falhas else f'{len(falhas)} FALHA(S): {falhas}'))
 sys.exit(1 if falhas else 0)

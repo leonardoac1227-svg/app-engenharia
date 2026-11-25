@@ -20,14 +20,12 @@ _SAINT_REMY = (rf"{_SAINT}[\s.\-']*{_REMY}"
                rf"|(?:saint|sant|san|sao)[\s.\-']*(?:rene|reni|renir)"
                rf"|{_OBRA}(?:remy|remi|hemi|remmy|saint)")
 
+# "Sonnet", "soneto": o ditado também escreve Saint Remy assim.
 _SONNET = (r"son+et+(?:e|i|y|is|es|s|h|o|a)?|sonata|sonate|sun+et+(?:e|i)?|zon+et+(?:e|i)?"
            rf"|{_OBRA}(?:so|som|son|sol|sou)[\s\-]+(?:net|nete|neti|neto)")
 
-PRONUNCIAS = {"Saint Remy": _SAINT_REMY, "Sonnet": _SONNET}
-# O ditado já escreveu "Sonnet" para Saint Remy. Vale enquanto não existir uma obra chamada Sonnet.
-NA_FALTA = {"Sonnet": "Saint Remy"}
-_DICAS = {"saintremy": 'Saint Remy (fala-se "san remi", "são remi", "sant remí")',
-          "sonnet": 'Sonnet (fala-se "sonéti", "soneto", "sonete")'}
+PRONUNCIAS = {"Saint Remy": rf"{_SAINT_REMY}|{_SONNET}"}
+_DICAS = {"saintremy": 'Saint Remy (fala-se "san remi", "são remi", "sant remí")'}
 
 
 def _sem_acento(texto: str) -> str:
@@ -40,7 +38,7 @@ def _chave(nome: str) -> str:
 
 
 def nome_certo(nome: str) -> str:
-    """Grafia oficial de um nome dito sozinho ("soneto" → "Sonnet"); outro nome volta igual."""
+    """Grafia oficial de um nome dito sozinho ("san remi" → "Saint Remy"); outro nome volta igual."""
     limpo = _sem_acento(unicodedata.normalize("NFC", nome or "")).strip()
     return next((oficial for oficial, padrao in PRONUNCIAS.items() if re.fullmatch(padrao, limpo)), nome)
 
@@ -50,7 +48,7 @@ def corrigir(texto: str, nomes_das_obras: list[str]) -> str:
     texto = unicodedata.normalize("NFC", texto or "")
     existentes = {_chave(n): n for n in nomes_das_obras}
     for oficial, padrao in PRONUNCIAS.items():
-        destino = existentes.get(_chave(oficial)) or existentes.get(_chave(NA_FALTA.get(oficial, "")))
+        destino = existentes.get(_chave(oficial))
         if not destino:
             continue
         achados = list(re.finditer(rf"(?<!\w)(?:{padrao})(?!\w)", _sem_acento(texto)))
