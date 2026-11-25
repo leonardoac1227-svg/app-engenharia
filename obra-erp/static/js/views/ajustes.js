@@ -349,7 +349,7 @@ function ligarEventos(raiz, { obra, usuarios }) {
   };
   acao('pedidos-conferir', () => iniciarPedidos(false));
   acao('pedidos-gravar', () => iniciarPedidos(true));
-  if (admin) api.get('/api/pedidos-antigos', { semCache: true }).then(mostrarPedidos).catch(() => {});
+  if (podeAdministrar()) api.get('/api/pedidos-antigos', { semCache: true }).then(mostrarPedidos).catch(() => {});
 
   acao('diagnostico', async () => {
     const card = raiz.querySelector('#cardDiagnostico');
