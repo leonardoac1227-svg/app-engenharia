@@ -50,8 +50,13 @@ def campos(d):
 print('== ENTULHO ==')
 for obra in (I19, O13, T21):
     d = conferir(obra, descricao='Caixa de entulho')
-    ok(campos(d) == ('SOS Entulho', 1, 'Em Aberto', 'Material') and 'faltando' not in d, 'entulho em qualquer obra', d)
+    ok(campos(d) == ('SOS Entulho', 250, 'Em Aberto', 'Material') and 'faltando' not in d, 'entulho em qualquer obra', d)
 ok(conferir(I19, descricao='caçamba de entulho', fornecedor='sos')['fornecedor'] == 'SOS Entulho', 'nome do fornecedor padronizado')
+
+from obra.services import padroes as _p
+_g = lambda v: {'fornecedor': 'SOS Entulho', 'categoria': 'Material', 'valor': v, 'status': 'Em Aberto', 'exemplo': 'Caixa de entulho', 'vezes': 5}
+ok(_p._valor_superado(_g(1)) and not _p._valor_superado(_g(250)), 'o R$ 1 antigo do entulho não ensina a IA')
+ok('R$ 250 por caixa' in _p.texto_para_prompt(), 'a IA lê R$ 250')
 
 print('== FRETE ==')
 d = conferir(O13, descricao='Frete referente a pregos')

@@ -49,9 +49,9 @@ class Padrao:
 
 PADROES = (
     Padrao(r"\bentulho\b",
-           "Caixa ou caçamba de entulho, em qualquer obra: fornecedor SOS Entulho, valor R$ 1 por caixa, "
+           "Caixa ou caçamba de entulho, em qualquer obra: fornecedor SOS Entulho, valor R$ 250 por caixa, "
            "Em Aberto, Material, descrição \"Caixa de entulho\". Duas caixas são dois lançamentos.",
-           fornecedor="SOS Entulho", valor=1, descricao="Caixa de entulho"),
+           fornecedor="SOS Entulho", valor=250, descricao="Caixa de entulho"),
     Padrao(r"\bfretes?\b",
            "Frete: sempre Diego motoboy, R$ 30, Em Aberto, categoria Frete, descrição \"Frete referente a "
            "[material]\". Dois fretes do mesmo material são dois lançamentos: \"(frete 1/2)\" e \"(frete 2/2)\".",
@@ -225,7 +225,7 @@ EXEMPLOS = (
     ('"Diesel pra desmoldar a forma, posto sossego, 11,46, O13"',
      'despesa: "Diesel para desmoldagem da forma metálica", "Posto Sossego", 11.46, Reembolso'),
     ('"Três caixas de entulho no O13"',
-     'três ações despesa, cada uma "Caixa de entulho", SOS Entulho, 1, Em Aberto'),
+     'três ações despesa, cada uma "Caixa de entulho", SOS Entulho, 250, Em Aberto'),
     ('"Mandei 8 sacos de cimento do I19 pro T21"',
      'despesa na obra T21: "8 sacos de cimento vindo do I19", sem fornecedor, 1, Em Aberto'),
     ('"Nota da Central em 3 vezes, materiais hidráulicos da piscina" + nota sem quadro de parcelas',
@@ -263,6 +263,11 @@ def texto_para_prompt() -> str:
     return "\n".join(linhas)
 
 
+def _valor_superado(grupo: dict) -> bool:
+    padrao = _padrao_de(_chave(f"{grupo['exemplo']} {grupo['fornecedor']}"), grupo["fornecedor"], "")
+    return bool(padrao and padrao.valor and grupo["valor"] != padrao.valor)
+
+
 def repetidos(obra_ids: list[int], referencia: str) -> list[dict]:
     """O que mais se repetiu nos últimos meses, para valer também o que ainda não virou regra."""
     if not obra_ids:
@@ -280,5 +285,6 @@ def repetidos(obra_ids: list[int], referencia: str) -> list[dict]:
             "fornecedor": fornecedor, "categoria": linha["categoria"], "valor": float(linha["valor"] or 0),
             "status": linha["status_pagamento"], "exemplo": texto(linha["descricao"], 80), "vezes": 0})
         grupo["vezes"] += 1
-    frequentes = [g for g in grupos.values() if g["vezes"] >= 2]
+    # Valor antigo de algo que hoje tem regra (entulho era R$ 1) não pode ensinar a IA errado.
+    frequentes = [g for g in grupos.values() if g["vezes"] >= 2 and not _valor_superado(g)]
     return sorted(frequentes, key=lambda g: -g["vezes"])[:MAX_REPETIDOS]
